@@ -49,6 +49,7 @@
     <div><span>Timeout</span><strong id="timeout-value">45s</strong></div>
   </div>
   <div class="switch-row"><div><strong>Hiện bản dịch theo luồng</strong><span class="help">Từng đoạn hiện ngay khi model dịch xong, không chờ cả batch. Tự dùng chế độ thường nếu proxy không hỗ trợ.</span></div><label class="toggle" aria-label="Hiện bản dịch theo luồng"><input id="streaming" type="checkbox"><span></span></label></div>
+  <div class="switch-row"><div><strong>Chống request chậm</strong><span class="help">Nếu một batch chậm bất thường (quá ~1,25 × p95 gần đây), gửi thêm một request song song sang model dự phòng và lấy kết quả về trước. Tốn thêm quota nhưng giảm độ trễ đuôi.</span></div><label class="toggle" aria-label="Chống request chậm"><input id="hedging" type="checkbox"><span></span></label></div>
   <div class="tip">Chọn cấu hình sẽ <strong>tự lưu ngay</strong>. Vùng đang đọc được dịch trước, phần còn lại dịch khi cuộn.</div>
   <div class="actions perf-actions"><button id="save-performance" type="button" class="secondary">Lưu hiệu năng</button><span id="perf-status" aria-live="polite">Đang tải…</span></div>
 </section>

@@ -7,6 +7,7 @@ const VIWEB_DEFAULTS = Object.freeze({
   model: 'gemini-3-flash',
   fallbackModels: 'gemini-3.5-flash-lite',
   streaming: true,
+  hedging: true,
   concurrentRequests: 3,
   maxBatchChars: 2600,
   maxBatchItems: 8,

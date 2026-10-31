@@ -34,7 +34,7 @@ function modelList(conf) {
 
 /* ---------- metrics (kept in storage.session so they never trigger settings resync) ---------- */
 const metrics = {since: Date.now(), requests: 0, ok: 0, failed: 0, retries: 0, rateLimited: 0, tokensIn: 0,
-  tokensOut: 0, cacheHits: 0, cacheMisses: 0, missing: 0, fallbacks: 0, cancelled: 0, latencies: []};
+  tokensOut: 0, cacheHits: 0, cacheMisses: 0, missing: 0, fallbacks: 0, cancelled: 0, hedges: 0, hedgeWins: 0, latencies: []};
 let metricsSaveTimer = null;
 const metricsReady = (async () => {
   try {
@@ -62,7 +62,7 @@ function metricsSummary() {
 }
 function resetMetrics() {
   Object.assign(metrics, {since: Date.now(), requests: 0, ok: 0, failed: 0, retries: 0, rateLimited: 0,
-    tokensIn: 0, tokensOut: 0, cacheHits: 0, cacheMisses: 0, missing: 0, fallbacks: 0, cancelled: 0, latencies: []});
+    tokensIn: 0, tokensOut: 0, cacheHits: 0, cacheMisses: 0, missing: 0, fallbacks: 0, cancelled: 0, hedges: 0, hedgeWins: 0, latencies: []});
   touchMetrics();
 }
 
@@ -312,12 +312,13 @@ function parseRetryAfter(resp) {
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0;
 }
 const plainModels = new Set(); // endpoint|model pairs that rejected optional sampling/JSON parameters
-async function post(url, body, conf, ctx, onDelta) {
-  if (isCancelled(ctx)) throw cancelledError();
+async function post(url, body, conf, ctx, onDelta, link) {
+  if (isCancelled(ctx) || link?.aborted) throw cancelledError();
   const controller = new AbortController();
   controller.cancelled = false;
   if (!inflight.has(ctx.owner)) inflight.set(ctx.owner, new Set());
   inflight.get(ctx.owner).add(controller);
+  link?.controllers.add(controller);
   // Idle timeout: re-armed on every streamed chunk, so long but healthy streams are not cut off.
   let timeout;
   const arm = () => {
@@ -345,6 +346,7 @@ async function post(url, body, conf, ctx, onDelta) {
   } finally {
     clearTimeout(timeout);
     inflight.get(ctx.owner)?.delete(controller);
+    link?.controllers.delete(controller);
   }
 }
 function buildBody(rows, conf, model, ctx, plain, stream) {
@@ -373,7 +375,7 @@ function buildBody(rows, conf, model, ctx, plain, stream) {
 function usable(row, value) {
   return typeof value === 'string' && (value.trim() || !row.text.trim()) && value.length <= row.text.length * 8 + 200;
 }
-async function llmCall(rows, conf, model, ctx) {
+async function llmCall(rows, conf, model, ctx, link) {
   const url = validateEndpoint(conf.endpoint);
   const legacy = Boolean(conf.customPrompt?.trim());
   const keys = rows.map((r, i) => legacy ? r.id : String(i + 1));
@@ -382,6 +384,7 @@ async function llmCall(rows, conf, model, ctx) {
   const stream = conf.streaming !== false && !legacy;
   const parser = stream ? new StreamParser() : null;
   const sent = new Set();
+  const me = {};
   const onDelta = parser ? text => {
     const items = [];
     for (const [key, value] of parser.feed(text)) {
@@ -389,17 +392,19 @@ async function llmCall(rows, conf, model, ctx) {
       if (i === undefined || sent.has(key) || !usable(rows[i], value)) continue;
       sent.add(key); items.push({id: rows[i].id, text: value});
     }
+    // Hedged calls race: only the first one to stream shows partials, so text never flickers between models.
+    if (link && (link.emitter ||= me) !== me) return;
     emitPartial(ctx, items);
   } : null;
   const started = Date.now();
   metrics.requests++;
   let json = null;
   try {
-    try { json = await post(url, buildBody(rows, conf, model, ctx, plainModels.has(plainKey), stream), conf, ctx, onDelta); }
+    try { json = await post(url, buildBody(rows, conf, model, ctx, plainModels.has(plainKey), stream), conf, ctx, onDelta, link); }
     catch (err) {
       // Some proxies/models reject sampling, JSON-mode or stream_options parameters: retry once without them.
       if (err.status !== 400 || plainModels.has(plainKey)) throw err;
-      json = await post(url, buildBody(rows, conf, model, ctx, true, stream), conf, ctx, onDelta);
+      json = await post(url, buildBody(rows, conf, model, ctx, true, stream), conf, ctx, onDelta, link);
       plainModels.add(plainKey);
     }
   } catch (err) {
@@ -444,27 +449,69 @@ function modelOrder(conf) {
   const models = modelList(conf);
   return [...models.filter(m => (modelCooldown.get(m) || 0) <= now), ...models.filter(m => (modelCooldown.get(m) || 0) > now)];
 }
+function newLink() { return {aborted: false, controllers: new Set(), emitter: null}; }
+function abortLink(link) {
+  link.aborted = true;
+  for (const controller of link.controllers) { controller.cancelled = true; controller.abort(); }
+}
+// Tail-latency guard: once a call outlives ~1.25x the recent p95, race a second one and keep the first success.
+const hedge = {minMs: 3000, maxMs: 20000};
+function hedgeDelay(conf) {
+  if (conf.hedging === false || metrics.latencies.length < 8) return 0;
+  return Math.max(hedge.minMs, Math.min(hedge.maxMs, percentile(metrics.latencies, 0.95) * 1.25));
+}
+function scheduleCall(rows, conf, ctx, model, link) {
+  return schedule(ctx.owner, () => {
+    if (link.aborted) throw cancelledError();
+    return llmCall(rows, conf, model, ctx, link);
+  }, ctx.priority);
+}
+function attempt(rows, conf, ctx, models, m) {
+  const delay = m === 0 ? hedgeDelay(conf) : 0;
+  const links = [newLink(), newLink()];
+  const primary = scheduleCall(rows, conf, ctx, models[m], links[0]);
+  if (!delay) return primary;
+  return new Promise((resolve, reject) => {
+    let done = false, hedging = false, hedgeFailed = false, primaryError = null, timer = null;
+    const finish = (fn, value) => {
+      if (done) return;
+      done = true; clearTimeout(timer); links.forEach(abortLink); fn(value);
+    };
+    primary.then(value => finish(resolve, value), err => {
+      if (done) return;
+      primaryError = err;
+      if (!hedging || hedgeFailed || err.cancelled) finish(reject, err);
+    });
+    timer = setTimeout(() => {
+      if (done) return;
+      hedging = true; metrics.hedges++; touchMetrics();
+      scheduleCall(rows, conf, ctx, models[1] || models[0], links[1]).then(
+        value => { metrics.hedgeWins++; finish(resolve, value); },
+        err => { if (done) return; hedgeFailed = true; if (primaryError || err.cancelled) finish(reject, primaryError || err); });
+    }, delay);
+  });
+}
 async function retryCall(rows, conf, ctx) {
   const models = modelOrder(conf);
   let lastError;
   for (let m = 0; m < models.length; m++) {
     const attempts = m === 0 ? 3 : 2;
-    for (let attempt = 0; attempt < attempts; attempt++) {
+    for (let attempt_ = 0; attempt_ < attempts; attempt_++) {
       try {
-        const result = await schedule(ctx.owner, () => llmCall(rows, conf, models[m], ctx), ctx.priority);
+        const result = await attempt(rows, conf, ctx, models, m);
         if (m > 0) { metrics.fallbacks++; touchMetrics(); }
         return result;
       } catch (err) {
         lastError = err;
         if (err.cancelled) throw err;
-        if (err.malformed) { if (attempt >= 1) throw err; metrics.retries++; await backoff(250); continue; }
+        if (err.malformed) { if (attempt_ >= 1) throw err; metrics.retries++; await backoff(250); continue; }
         const modelProblem = err.status === 404 || (err.status === 400 && /model/i.test(err.message));
         const temporary = !err.status || err.status === 408 || err.status === 429 || err.status >= 500;
         if (modelProblem) break;
         if (!temporary) throw err;
-        if (attempt >= attempts - 1) { modelCooldown.set(models[m], Date.now() + 30000); break; }
+        if (attempt_ >= attempts - 1) { modelCooldown.set(models[m], Date.now() + 30000); break; }
         metrics.retries++;
-        const wait = Math.min(5000, 650 * 2 ** attempt + Math.random() * 250);
+        const wait = Math.min(5000, 650 * 2 ** attempt_ + Math.random() * 250);
         await backoff(Math.max(wait, Math.min(err.retryAfter || 0, 15000)));
       }
     }

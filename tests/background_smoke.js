@@ -7,7 +7,7 @@ const {webcrypto} = require('node:crypto');
 const root = path.resolve(__dirname,'..');
 const script = fs.readFileSync(path.join(root,'shared.js'),'utf8')+'\n'+
   fs.readFileSync(path.join(root,'background.js'),'utf8').replace("importScripts('shared.js');",'')+
-  '\nthis.__test={sched,schedule,metricsSummary,modelCooldown,StreamParser};';
+  '\nthis.__test={sched,schedule,metricsSummary,modelCooldown,StreamParser,hedge,metrics};';
 let calls=[], mode='ok', listener, tabMessages=[];
 const config = {endpoint:'http://127.0.0.1:8317/v1',model:'gemini-3.8-flash(low)',fallbackModels:'gemini-3.8-flash-lite',
   apiKey:'unit-test-key',concurrentRequests:4,customPrompt:''};
@@ -40,6 +40,7 @@ const fakeFetch = async (url, req) => {
   calls.push({url,headers:req.headers,input,user,items,signal:req.signal});
   const model = input.model;
   if (mode==='rate' && model==='gemini-3.8-flash(low)') return response(429,{error:{message:'quota'}},{'retry-after':'0'});
+  if (mode==='slow1' && model==='slow-primary') return new Promise((_,reject)=>req.signal.addEventListener('abort',()=>{calls.aborted=(calls.aborted||0)+1;reject(Object.assign(new Error('aborted'),{name:'AbortError'}));}));
   if (mode==='hang') return new Promise((_,reject)=>req.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'}))));
   if (mode==='plain' && input.response_format) return response(400,{error:{message:'response_format unsupported'}});
   if (mode==='bad' && items.length>1) return completion(JSON.stringify({wrong:'x'}));
@@ -175,6 +176,27 @@ const row=(id,text,context='')=>({id,text,context});
   assert.ok(context.__test.sched.limit<4,'AIMD should reduce concurrency after 429');
   const m1=context.__test.metricsSummary();
   assert.ok(m1.rateLimited>=1 && m1.fallbacks>=1);
+
+  // Hedging: a call slower than the recent p95 is raced by the fallback model; the loser is aborted
+  context.__test.modelCooldown.clear(); context.__test.sched.pauseUntil=0;
+  context.__test.sched.limit=4; context.__test.sched.ceiling=4;
+  assert.ok(context.__test.metrics.latencies.length>=8);
+  context.__test.hedge.minMs=60;
+  calls=[]; calls.aborted=0; tabMessages=[]; mode='slow1'; config.model='slow-primary'; config.fallbackModels='fast-backup';
+  const h0=context.__test.metricsSummary().hedgeWins||0;
+  r=await send({type:'VIWEB_TRANSLATE',batchId:'h1',rows:[row('h1','Hedge me please')]},{tab:{id:7},frameId:0});
+  assert.equal(r.ok,true,r.error);
+  assert.equal(r.translations[0].text,'VI: Hedge me please');
+  assert.deepEqual(calls.map(c=>c.input.model),['slow-primary','fast-backup']);
+  assert.equal(context.__test.metricsSummary().hedgeWins,h0+1);
+  assert.equal(calls.aborted,1,'losing call must be aborted');
+  // Disabled: no second request is raced, the slow call is waited for (cancelled here via timeout-free abort)
+  calls=[]; config.hedging=false;
+  const noHedge=send({type:'VIWEB_TRANSLATE',rows:[row('h2','Hedge off')]},{tab:{id:8},frameId:0});
+  await new Promise(res=>setTimeout(res,400));
+  assert.equal(calls.length,1,'no hedge when disabled');
+  await send({type:'VIWEB_CANCEL'},{tab:{id:8},frameId:0}); await noHedge;
+  config.hedging=true; context.__test.hedge.minMs=3000;
 
   // Cancellation aborts in-flight requests for that tab/frame only
   mode='hang'; config.model='hang-model'; config.fallbackModels='';

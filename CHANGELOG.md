@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.2 — Hedged requests
+
+- **Tail-latency hedging**: if a call outlives ~1.25 × the recent p95 (min 3s, max 20s, needs ≥8 samples), a second request is raced on the fallback model (or the same model when none is set). The first success wins and the loser is aborted. Partial text only streams from whichever call started first, so nothing flickers between models. Metrics: `hedges`, `hedgeWins`. Toggle: Options → Hiệu năng → "Chống request chậm" (`hedging`, default on). Test: `tests/background_smoke.js`.
+- Not done on purpose: connection warm-up (loopback proxy, negligible gain) and a per-page glossary (needs an extra model pass; unproven benefit).
+
 ## 1.4.1 — True LRU cache, single scan pipeline
 
 - **Cache is now true LRU**: a batch is read in one IndexedDB transaction (`cacheGetMany`) and hits are re-stamped in a second one (only if older than 60s, to avoid write amplification). `trimCache` evicts the least recently *used* entries instead of the oldest written. Test: `tests/cache_lru_smoke.py` (real Chromium IndexedDB).

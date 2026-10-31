@@ -28,6 +28,7 @@
     $('model').value = conf.model;
     $('fallbackModels').value = conf.fallbackModels || '';
     $('streaming').checked = conf.streaming !== false;
+    $('hedging').checked = conf.hedging !== false;
     $('apiKey').value = conf.apiKey;
     $('excludedDomains').value = conf.excludedDomains;
     $('customPrompt').value = conf.customPrompt;
@@ -51,6 +52,7 @@
       model: $('model').value.trim(),
       fallbackModels: $('fallbackModels').value.trim(),
       streaming: $('streaming').checked,
+      hedging: $('hedging').checked,
       apiKey: $('apiKey').value.trim(),
       excludedDomains: $('excludedDomains').value.trim(),
       customPrompt: $('customPrompt').value.trim()
@@ -119,6 +121,7 @@
     $(id).addEventListener('change', () => changed(0));
   }
   $('streaming').addEventListener('change', () => changed(0));
+  $('hedging').addEventListener('change', () => changed(0));
   document.querySelectorAll('input[name=autoMode]').forEach(input => input.addEventListener('change', () => changed(0))); 
   $('toggle-key').addEventListener('click', () => {
     const visible = $('apiKey').type === 'text';
