@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.1 — Translated images replace the original picture
+
+- **No more DOM overlay.** The translation is now painted into a full-resolution copy of the image (up to 4096 px / 16 MP; PNG ≤ 3 MP, otherwise JPEG 0.92) and that copy replaces the `<img>` source (blob URL). Zoom, lightboxes, "Save image as", drag-and-drop and scrolling now just work, and the text stays sharp at any size — it no longer depends on the small on-page overlay.
+- Handles `srcset`/`sizes` (density preserved so layout does not change), `<picture><source>` and a wrapping `<a href>` to the same picture (so lightbox links open the translated version). All are restored when you switch back to the original.
+- "Xem bản gốc / Xem bản dịch", global "show original" mode and switching image translation off just swap the source back — no API call. If the page itself swaps the picture (lazy-load, carousels) the old translation is dropped.
+- Pages whose CSP blocks `blob:` images fall back to a `data:` URL; if both are blocked the original stays and a hint is shown.
+- Cache is unchanged (regions are cached by image content), so re-translating a known image costs 0 tokens and only re-paints locally.
+- Test: `tests/image_smoke.py` rewritten (pixel checks on the baked image, link/picture handling, CSP fallback).
+
 ## 1.6.0 — Image translation, full media settings
 
 - **Image translation** (`image.js`): hover any image ≥ `imageMinSize` px and press "Dịch ảnh", use the right-click menu "Dịch ảnh này sang tiếng Việt", or switch to auto mode (translates images as they scroll into view, capped by `imageAutoLimit` per page). One multimodal call returns OCR + bounding boxes + Vietnamese; the translation is drawn over the image with background/text colour sampled around each box and the font fitted to the box. Toggle original ⇄ translated without a new call; follows scroll/resize/`object-fit`.

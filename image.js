@@ -1,6 +1,8 @@
-/* VietWeb AI — image translation (v1.6).
- * Hover an image (or use auto mode / the right-click menu) → one multimodal call returns OCR + boxes + Vietnamese,
- * which is drawn back over the image. Results are cached by image hash in the service worker. */
+/* VietWeb AI — image translation (v1.7).
+ * Hover an image (or use auto mode / the right-click menu) → one multimodal call returns OCR + boxes + Vietnamese.
+ * The translation is painted into a full-resolution copy of the picture and that copy REPLACES the <img> source
+ * (blob URL), so zoom, lightboxes, "save image as" and drag-and-drop all get the translated picture.
+ * Results are cached by image hash in the service worker. */
 (() => {
   'use strict';
   const M = globalThis.VIWEB_MEDIA;
@@ -8,8 +10,9 @@
   window.__vietwebImage = true;
 
   let conf = {...M.DEFAULTS};
-  const states = new WeakMap(); // img -> {status: idle|busy|done|empty|error, regions, showing, src}
-  const overlays = new Map();   // img -> overlay record (only images that currently have a drawn translation)
+  // img -> {status: idle|busy|done|empty|error, regions, showing, applied, urls:Set, orig, blobUrl, density}
+  const states = new WeakMap();
+  const translated = new Set(); // images whose source currently may be our translated copy
   let hoverImg = null, onPill = false, hideTimer = 0, raf = 0, pointer = null, pointerBusy = false;
   let autoCount = 0, autoRunning = 0;
   const autoQueue = [];
@@ -18,11 +21,6 @@
     :host{all:initial}
     .layer{position:fixed;inset:0;pointer-events:none;overflow:hidden;
       font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
-    .ov{position:fixed;overflow:hidden;pointer-events:none;display:none}
-    .in{position:absolute;container-type:size}
-    .reg{position:absolute;box-sizing:border-box;display:flex;align-items:center;justify-content:center;overflow:hidden;
-      border-radius:3px;line-height:1.15;text-align:center;font-weight:600}
-    .t{width:100%;overflow-wrap:anywhere;padding:0 1px}
     .pill{position:fixed;display:none;pointer-events:auto;cursor:pointer;border:0;border-radius:999px;padding:6px 12px;
       font:600 12px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;letter-spacing:.01em;
       color:#1d1d1f;background:rgba(255,255,255,.86);-webkit-backdrop-filter:saturate(180%) blur(14px);
@@ -61,11 +59,18 @@
     const min = Math.max(48, Number(conf.imageMinSize) || 160), r = img.getBoundingClientRect();
     return r.width >= min && r.height >= min * 0.6 && img.naturalWidth >= 64;
   }
+  const sameImage = (st, img) => st.urls.has(imgSrc(img)) || st.urls.has(img.src);
+  function dropState(img) {
+    const st = states.get(img);
+    if (st?.blobUrl) URL.revokeObjectURL(st.blobUrl);
+    translated.delete(img);
+    states.delete(img);
+  }
   const stateOf = img => {
     let st = states.get(img);
-    if (!st || st.src !== imgSrc(img)) {
-      removeOverlay(img);
-      st = {status: 'idle', regions: null, showing: true, src: imgSrc(img)};
+    if (!st || !sameImage(st, img)) {
+      dropState(img); // the page swapped the picture: forget the old translation
+      st = {status: 'idle', regions: null, showing: true, applied: false, urls: new Set([imgSrc(img), img.src]), orig: null, blobUrl: '', density: 1};
       states.set(img, st);
     }
     return st;
@@ -101,7 +106,7 @@
   function pillAction(img) {
     const st = stateOf(img);
     if (st.status === 'idle' || st.status === 'error') translate(img);
-    else if (st.status === 'done') { st.showing = !st.showing; refreshPill(img); startLoop(); }
+    else if (st.status === 'done') { st.showing = !st.showing; applyShowing(img, st); refreshPill(img); }
   }
   const refreshPill = img => { if (hoverImg === img) showPill(img); };
 
@@ -134,7 +139,7 @@
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-    return {data: canvas.toDataURL('image/jpeg', 0.85), canvas};
+    return {data: canvas.toDataURL('image/jpeg', 0.85)};
   }
   function dataUrlToBlob(url) {
     const [head, body] = url.split(',');
@@ -154,7 +159,8 @@
     } finally { URL.revokeObjectURL(url); }
   }
   async function imageData(img) {
-    try { return encode(img, img.naturalWidth, img.naturalHeight); }
+    const nw = img.naturalWidth, nh = img.naturalHeight;
+    try { return {...encode(img, nw, nh), source: img, w: nw, h: nh}; }
     catch { /* cross-origin image taints the canvas: fetch the bytes instead */ }
     const src = imgSrc(img);
     let blob;
@@ -168,7 +174,7 @@
       blob = dataUrlToBlob(res.data);
     }
     const {source, w, h} = await decodeBlob(blob);
-    return encode(source, w, h);
+    return {...encode(source, w, h), source, w, h};
   }
 
   /* ---------- colours sampled around each box so the translation blends in ---------- */
@@ -193,85 +199,144 @@
     return {bg: `rgb(${r},${g},${b})`, fg: (0.299 * r + 0.587 * g + 0.114 * b) > 140 ? '#111' : '#fff'};
   }
 
-  /* ---------- overlay ---------- */
-  function buildOverlay(img, st, canvas) {
-    const {layer} = ensureUi();
-    removeOverlay(img);
-    const el = document.createElement('div'), inner = document.createElement('div');
-    el.className = 'ov';
-    inner.className = 'in';
-    el.append(inner);
-    const subtle = conf.imageStyle === 'subtle', regs = [];
-    for (const region of st.regions) {
-      const reg = document.createElement('div'), text = document.createElement('div');
-      reg.className = 'reg';
-      text.className = 't';
-      text.textContent = region.v;
-      reg.append(text);
-      const [y0, x0, y1, x1] = region.b, pad = 4;
-      const top = Math.max(0, y0 - pad), left = Math.max(0, x0 - pad);
-      reg.style.cssText = `top:${top / 10}%;left:${left / 10}%;height:${(Math.min(1000, y1 + pad) - top) / 10}%;width:${(Math.min(1000, x1 + pad) - left) / 10}%;`;
-      const colors = region.colors || (region.colors = canvas ? sampleColors(canvas, region.b) : {bg: '#fff', fg: '#111'});
-      reg.style.background = subtle ? 'rgba(0,0,0,.72)' : colors.bg;
-      reg.style.color = subtle ? '#fff' : colors.fg;
-      inner.append(reg);
-      regs.push(reg);
+  /* ---------- paint the translation into a full-resolution copy ---------- */
+  const FONT = '-apple-system, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+  function wrapLines(ctx, text, maxW) {
+    const lines = [];
+    let line = '';
+    for (const word of text.split(/\s+/).filter(Boolean)) {
+      if (ctx.measureText(word).width > maxW) return null;
+      const next = line ? line + ' ' + word : word;
+      if (line && ctx.measureText(next).width > maxW) { lines.push(line); line = word; } else line = next;
     }
-    layer.append(el);
-    overlays.set(img, {el, inner, regs, geo: '', fitW: 0, fitTimer: 0});
+    if (line) lines.push(line);
+    return lines;
   }
-  function removeOverlay(img) {
-    const ov = overlays.get(img);
-    if (!ov) return;
-    clearTimeout(ov.fitTimer);
-    ov.el.remove();
-    overlays.delete(img);
+  function layoutText(ctx, text, bw, bh) {
+    let lo = 6, hi = Math.max(6, bh * 0.9), best = null;
+    for (let i = 0; i < 10; i++) {
+      const size = (lo + hi) / 2;
+      ctx.font = `600 ${size}px ${FONT}`;
+      const lines = wrapLines(ctx, text, bw);
+      if (lines && lines.length * size * 1.18 <= bh) { best = {size, lines}; lo = size; } else hi = size;
+    }
+    if (best) return best;
+    ctx.font = `600 6px ${FONT}`;
+    return {size: 6, lines: wrapLines(ctx, text, Infinity) || [text]};
   }
-  function fit(ov, cw) {
-    for (const reg of ov.regs) {
-      const text = reg.firstChild;
-      let lo = 6, hi = 44, best = 6;
-      for (let i = 0; i < 7; i++) {
-        const mid = (lo + hi) / 2;
-        reg.style.fontSize = mid + 'px';
-        if (text.offsetHeight <= reg.clientHeight + 1 && text.scrollWidth <= text.clientWidth + 1) { best = mid; lo = mid; } else hi = mid;
-      }
-      reg.style.fontSize = (best / Math.max(1, cw)) * 100 + 'cqw';
-    }
-    ov.fitW = cw;
+  function paintRegions(ctx, canvas, regions) {
+    const W = canvas.width, H = canvas.height, subtle = conf.imageStyle === 'subtle';
+    const colors = regions.map(r => subtle ? {bg: 'rgba(0,0,0,.74)', fg: '#fff'} : sampleColors(canvas, r.b)); // sample before painting over
+    const pad = Math.max(2, Math.round(Math.min(W, H) * 0.004));
+    regions.forEach((region, i) => {
+      const [y0, x0, y1, x1] = region.b;
+      const left = Math.max(0, x0 / 1000 * W - pad), top = Math.max(0, y0 / 1000 * H - pad);
+      const w = Math.min(W, x1 / 1000 * W + pad) - left, h = Math.min(H, y1 / 1000 * H + pad) - top;
+      if (w < 4 || h < 4) return;
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(left, top, w, h, Math.min(6, h * 0.15));
+      ctx.fillStyle = colors[i].bg;
+      ctx.fill();
+      ctx.clip();
+      const inner = Math.max(1, w * 0.02), {size, lines} = layoutText(ctx, region.v, w - inner * 2, h);
+      ctx.fillStyle = colors[i].fg;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const lh = size * 1.18, y = top + h / 2 - ((lines.length - 1) * lh) / 2;
+      lines.forEach((text, n) => ctx.fillText(text, left + w / 2, y + n * lh, w));
+      ctx.restore();
+    });
   }
-  function updateOverlay(img, ov) {
-    const st = states.get(img);
-    if (!img.isConnected || !st || st.src !== imgSrc(img)) { removeOverlay(img); if (st) { st.status = 'idle'; st.regions = null; } return; }
-    const r = img.getBoundingClientRect();
-    if (!st.showing || conf.visualMode === 'original' || !enabled() || r.width < 24 || r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) {
-      ov.el.style.display = 'none';
-      ov.geo = '';
-      return;
+  async function bake(source, w, h, regions, cssW) {
+    const s = Math.min(1, 4096 / Math.max(w, h), Math.sqrt(16e6 / (w * h)));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(w * s));
+    canvas.height = Math.max(1, Math.round(h * s));
+    const ctx = canvas.getContext('2d', {willReadFrequently: true});
+    ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+    paintRegions(ctx, canvas, regions);
+    const png = canvas.width * canvas.height <= 3e6; // screenshots stay lossless, big photos stay small
+    const blob = await new Promise(res => canvas.toBlob(res, png ? 'image/png' : 'image/jpeg', 0.92));
+    if (!blob) throw new Error('Không tạo được ảnh đã dịch.');
+    return {blob, density: canvas.width / Math.max(1, cssW)};
+  }
+
+  /* ---------- swap the picture the page shows ---------- */
+  const setAttr = (el, name, value) => { if (value == null) el.removeAttribute(name); else el.setAttribute(name, value); };
+  function captureOriginal(img, st) {
+    const o = {src: img.getAttribute('src'), srcset: img.getAttribute('srcset'), sizes: img.getAttribute('sizes'), sources: [], link: null};
+    if (img.parentElement?.tagName === 'PICTURE') for (const s of img.parentElement.querySelectorAll('source')) o.sources.push([s, s.getAttribute('srcset')]);
+    const a = img.closest('a'), current = imgSrc(img);
+    if (a && a.getAttribute('href') && (a.href === current || a.href === img.src)) o.link = [a, a.getAttribute('href')];
+    st.orig = o;
+  }
+  function showUrl(img, st, url) {
+    img.removeAttribute('sizes');
+    for (const [source] of st.orig.sources) source.removeAttribute('srcset');
+    if (st.density > 1.02) img.setAttribute('srcset', `${url} ${st.density.toFixed(3)}x`); else img.removeAttribute('srcset');
+    img.src = url;
+    if (st.orig.link) st.orig.link[0].setAttribute('href', url);
+  }
+  function showOriginal(img, st) {
+    const o = st.orig;
+    setAttr(img, 'sizes', o.sizes);
+    for (const [source, srcset] of o.sources) setAttr(source, 'srcset', srcset);
+    setAttr(img, 'srcset', o.srcset);
+    setAttr(img, 'src', o.src);
+    if (o.link) setAttr(o.link[0], 'href', o.link[1]);
+  }
+  function waitLoad(img, ms = 8000) {
+    return new Promise(resolve => {
+      const done = ok => { clearTimeout(timer); img.removeEventListener('load', onLoad); img.removeEventListener('error', onError); resolve(ok); };
+      const onLoad = () => done(true), onError = () => done(false), timer = setTimeout(() => done(false), ms);
+      img.addEventListener('load', onLoad);
+      img.addEventListener('error', onError);
+    });
+  }
+  const blobToDataUrl = blob => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+  function applyShowing(img, st) {
+    if (st.status !== 'done') return;
+    const want = st.showing && conf.visualMode !== 'original' && enabled();
+    if (want === st.applied) return;
+    st.applied = want;
+    if (want) showUrl(img, st, st.shownUrl); else showOriginal(img, st);
+  }
+  // Pages with a strict img-src CSP may refuse blob: URLs, so fall back to a data: URL.
+  async function installTranslated(img, st, blob) {
+    captureOriginal(img, st);
+    st.blobUrl = URL.createObjectURL(blob);
+    st.urls.add(st.blobUrl);
+    st.shownUrl = st.blobUrl;
+    showUrl(img, st, st.blobUrl);
+    let ok = await waitLoad(img);
+    if (!ok) {
+      const dataUrl = await blobToDataUrl(blob);
+      st.urls.add(dataUrl);
+      st.shownUrl = dataUrl;
+      showUrl(img, st, dataUrl);
+      ok = await waitLoad(img);
+      if (ok) { URL.revokeObjectURL(st.blobUrl); st.blobUrl = ''; }
     }
-    const cs = getComputedStyle(img), n = v => parseFloat(v) || 0;
-    const bl = n(cs.borderLeftWidth) + n(cs.paddingLeft), bt = n(cs.borderTopWidth) + n(cs.paddingTop);
-    const bw = r.width - bl - n(cs.borderRightWidth) - n(cs.paddingRight), bh = r.height - bt - n(cs.borderBottomWidth) - n(cs.paddingBottom);
-    let cw = bw, ch = bh, cx = 0, cy = 0;
-    const fitMode = cs.objectFit, nat = img.naturalWidth / img.naturalHeight;
-    if (nat && ['contain', 'cover', 'scale-down'].includes(fitMode)) {
-      const scale = fitMode === 'cover' ? Math.max(bw / img.naturalWidth, bh / img.naturalHeight)
-        : Math.min(bw / img.naturalWidth, bh / img.naturalHeight, fitMode === 'scale-down' ? 1 : Infinity);
-      cw = img.naturalWidth * scale; ch = img.naturalHeight * scale; cx = (bw - cw) / 2; cy = (bh - ch) / 2;
+    if (!ok) {
+      showOriginal(img, st);
+      throw new Error('Trang này chặn việc thay ảnh (CSP).');
     }
-    const geo = [r.left + bl, r.top + bt, bw, bh, cx, cy, cw, ch].map(v => Math.round(v * 10) / 10).join(',');
-    if (geo === ov.geo) return;
-    ov.geo = geo;
-    ov.el.style.cssText = `display:block;left:${r.left + bl}px;top:${r.top + bt}px;width:${bw}px;height:${bh}px;`;
-    ov.inner.style.cssText = `left:${cx}px;top:${cy}px;width:${cw}px;height:${ch}px;`;
-    if (!ov.fitW) fit(ov, cw);
-    else if (Math.abs(cw - ov.fitW) / ov.fitW > 0.3) { clearTimeout(ov.fitTimer); ov.fitTimer = setTimeout(() => fit(ov, cw), 220); }
+    st.applied = true;
+    translated.add(img);
+  }
+  function pruneDetached() {
+    for (const img of [...translated]) if (!img.isConnected) dropState(img);
   }
   function loop() {
     raf = 0;
-    for (const [img, ov] of overlays) updateOverlay(img, ov);
     placePill();
-    if (overlays.size || (hoverImg && ui && ui.pill.style.display !== 'none')) raf = requestAnimationFrame(loop);
+    if (hoverImg && ui && ui.pill.style.display !== 'none') raf = requestAnimationFrame(loop);
   }
   function startLoop() { if (!raf) raf = requestAnimationFrame(loop); }
 
@@ -288,18 +353,22 @@
     if (st.status === 'busy' || st.status === 'done') return;
     st.status = 'busy';
     refreshPill(img);
-    const src = st.src;
+    const src = imgSrc(img), cssW = img.naturalWidth;
     try {
-      const {data, canvas} = await imageData(img);
+      const {data, source, w, h} = await imageData(img);
       const res = await M.send({type: 'VIWEB_IMAGE', data, page: {title: document.title.slice(0, 120)}});
       if (!res?.ok) throw new Error(res?.error || 'Dịch ảnh thất bại.');
-      if (states.get(img) !== st || st.src !== imgSrc(img) || src !== st.src) return;
+      if (states.get(img) !== st || imgSrc(img) !== src) return;
       st.regions = res.regions || [];
       if (!st.regions.length) { st.status = 'empty'; refreshPill(img); return; }
+      const {blob, density} = await bake(source, w, h, st.regions, cssW);
+      if (states.get(img) !== st || imgSrc(img) !== src) return;
+      st.density = density;
+      await installTranslated(img, st, blob);
       st.status = 'done';
       st.showing = true;
-      buildOverlay(img, st, canvas);
-      startLoop();
+      pruneDetached();
+      applyShowing(img, st);
     } catch (error) {
       if (states.get(img) !== st) return;
       st.status = auto ? 'idle' : 'error';
@@ -333,8 +402,7 @@
   function applyMode() {
     if (conf.imageMode === 'auto' && enabled()) startScan(); else stopScan();
     if (!enabled()) hidePill();
-    for (const [img, ov] of overlays) { ov.geo = ''; updateOverlay(img, ov); }
-    if (overlays.size) startLoop();
+    for (const img of translated) { const st = states.get(img); if (st) applyShowing(img, st); }
   }
 
   chrome.runtime.onMessage.addListener(msg => {
@@ -345,7 +413,7 @@
     if (!img) { toast('Không tìm thấy thẻ <img> — ảnh nền CSS chưa được hỗ trợ.'); return; }
     if (!img.complete || !img.naturalWidth) { toast('Ảnh chưa tải xong.'); return; }
     const st = stateOf(img);
-    if (st.status === 'done') { st.showing = !st.showing; startLoop(); return; }
+    if (st.status === 'done') { st.showing = !st.showing; applyShowing(img, st); refreshPill(img); return; }
     translate(img);
   });
   document.addEventListener('pointermove', onPointerMove, {passive: true, capture: true});
