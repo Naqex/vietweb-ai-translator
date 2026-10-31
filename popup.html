@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>VietWeb AI</title>
+<link rel="stylesheet" href="ui.css">
+</head>
+<body class="popup">
+<header class="top">
+  <div class="app-icon" aria-hidden="true">文</div>
+  <div class="brand"><strong>VietWeb AI</strong><small>Đọc web bằng tiếng Việt</small></div>
+  <button id="settings" class="icon-button" title="Cài đặt" aria-label="Cài đặt">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
+</header>
+<main>
+  <div class="language" aria-label="Ngôn ngữ dịch"><span>Tự động nhận diện</span><span class="arrow" aria-hidden="true">→</span><strong>Tiếng Việt</strong></div>
+  <section class="group">
+    <div class="row"><div class="row-text"><strong>Dịch tự động</strong><span class="help" id="hostname">Website hiện tại</span><span class="help" id="mode-hint">Tùy chọn được lưu cho website</span></div><label class="toggle" aria-label="Dịch tự động"><input id="site-toggle" type="checkbox"><span></span></label></div>
+    <div class="row"><div class="row-text"><strong>Hiện bản gốc</strong><span class="help">Không gọi lại AI</span></div><label class="toggle" aria-label="Hiện bản gốc"><input id="original-toggle" type="checkbox"><span></span></label></div>
+  </section>
+  <div class="stats" role="group" aria-label="Thống kê trang">
+    <div><strong id="translated">—</strong><span>Đã dịch</span></div>
+    <div><strong id="cached">—</strong><span>Cache</span></div>
+    <div><strong id="latency">—</strong><span>Batch gần nhất</span></div>
+  </div>
+  <div id="metrics-line" class="metrics-line" aria-label="Thống kê API"></div>
+  <div id="notice" class="notice" role="status" aria-live="polite">Đang kiểm tra trang…</div>
+  <button id="rescan" class="primary">Dịch lại nội dung hiện tại</button>
+  <button id="open-options" class="subtle">Cấu hình CLIProxyAPI &amp; mô hình AI</button>
+</main>
+<footer>Không thanh nổi · Không analytics · API riêng của bạn</footer>
+<script src="shared.js"></script><script src="popup.js"></script>
+</body>
+</html>

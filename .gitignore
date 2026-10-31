@@ -1,0 +1,7 @@
+.env
+.env.*
+!.env.example
+*.zip
+tests/*-preview.png
+__pycache__/
+node_modules/

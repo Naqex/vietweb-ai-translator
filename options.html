@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>VietWeb AI — Cài đặt</title>
+<link rel="stylesheet" href="ui.css">
+</head>
+<body class="options">
+<header class="nav">
+  <div class="nav-inner">
+    <div class="nav-brand"><span class="app-icon small" aria-hidden="true">文</span><strong>VietWeb AI</strong></div>
+    <div id="save-state" class="save-state" role="status" aria-live="polite">Đang tải cấu hình…</div>
+  </div>
+</header>
+<div class="app-shell">
+<div class="page-head">
+  <h1>Cài đặt</h1>
+  <p>Dịch web sang tiếng Việt qua CLIProxyAPI của riêng bạn. Mọi thay đổi được lưu tự động.</p>
+</div>
+<main class="settings-grid">
+
+<section class="settings-card" aria-labelledby="h-conn">
+  <div class="card-title"><div><h2 id="h-conn">Kết nối</h2><p>CLIProxyAPI tương thích OpenAI. Chỉ cần nhập API Key nếu proxy có xác thực.</p></div><span class="pill">OpenAI-compatible</span></div>
+  <div class="fields">
+    <label>Base URL<input id="endpoint" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:8317/v1"></label>
+    <label>Model ID<input id="model" list="model-list" spellcheck="false" autocomplete="off" placeholder="gemini-3-flash"><datalist id="model-list"></datalist></label>
+    <label class="full">Model dự phòng <span class="optional">tuỳ chọn · dùng khi model chính lỗi hoặc hết quota (429); phân tách bằng dấu phẩy</span><input id="fallbackModels" spellcheck="false" autocomplete="off" placeholder="gemini-3.5-flash-lite"></label>
+    <label class="full">API Key <span class="optional">chỉ lưu cục bộ</span><div class="key-field"><input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Key client của CLIProxyAPI"><button id="toggle-key" type="button" class="text-button">Hiện</button></div></label>
+  </div>
+  <div class="tip">Hậu tố trong ngoặc là mức <em>effort/thinking</em> của CLIProxyAPI, gắn vào một model id có sẵn: <code>gemini-3.8-flash-high(low)</code>, <code>(medium)</code>, <code>(none)</code>… Dịch thuật không cần suy luận: <code>gemini-3-flash</code> không hậu tố (không thinking) là nhanh nhất. Dùng <strong>Tải danh sách model</strong> để xem tên proxy đang cung cấp.</div>
+  <div class="actions"><button id="save" class="primary">Lưu tất cả</button><button id="test" class="secondary">Lưu &amp; kiểm tra kết nối</button><button id="load-models" class="secondary" type="button">Tải danh sách model</button><span id="result" aria-live="polite"></span></div>
+</section>
+
+<section class="settings-card" aria-labelledby="h-perf">
+  <div class="card-title"><div><h2 id="h-perf">Hiệu năng</h2><p>Chọn một cấu hình, không cần chỉnh từng tham số.</p></div></div>
+  <div class="segments" role="group" aria-label="Chế độ hiệu năng">
+    <button class="segment" data-preset="fast">Nhanh</button>
+    <button class="segment selected" data-preset="balanced">Cân bằng</button>
+    <button class="segment" data-preset="quality">Chất lượng</button>
+    <button class="segment" data-preset="gemini" title="Tối ưu cho Gemini Flash nhiều quota: song song cao, batch vừa phải">Gemini</button>
+  </div>
+  <div class="performance">
+    <div><span>Request song song</span><strong id="parallel-value">3</strong></div>
+    <div><span>Ký tự / batch</span><strong id="chars-value">2.600</strong></div>
+    <div><span>Đoạn / batch đầu trang</span><strong id="first-value">5</strong></div>
+    <div><span>Prefetch vùng đọc</span><strong id="prefetch-value">700px</strong></div>
+    <div><span>Timeout</span><strong id="timeout-value">45s</strong></div>
+  </div>
+  <div class="switch-row"><div><strong>Hiện bản dịch theo luồng</strong><span class="help">Từng đoạn hiện ngay khi model dịch xong, không chờ cả batch. Tự dùng chế độ thường nếu proxy không hỗ trợ.</span></div><label class="toggle" aria-label="Hiện bản dịch theo luồng"><input id="streaming" type="checkbox"><span></span></label></div>
+  <div class="tip">Chọn cấu hình sẽ <strong>tự lưu ngay</strong>. Vùng đang đọc được dịch trước, phần còn lại dịch khi cuộn.</div>
+  <div class="actions perf-actions"><button id="save-performance" type="button" class="secondary">Lưu hiệu năng</button><span id="perf-status" aria-live="polite">Đang tải…</span></div>
+</section>
+
+<section class="settings-card" aria-labelledby="h-auto">
+  <div class="card-title"><div><h2 id="h-auto">Tự động dịch</h2><p>Mặc định nhận diện ngôn ngữ → tiếng Việt.</p></div><span class="pill violet">VI</span></div>
+  <fieldset class="auto-modes" aria-label="Phạm vi dịch tự động">
+    <label><input type="radio" name="autoMode" value="all"><span><strong>Tất cả website</strong><small>Trừ danh sách loại trừ và các trang đã tắt riêng</small></span></label>
+    <label><input type="radio" name="autoMode" value="selected"><span><strong>Chỉ website đã chọn</strong><small>Lưu danh sách domain, không dịch trang khác</small></span></label>
+    <label><input type="radio" name="autoMode" value="off"><span><strong>Tắt toàn bộ</strong><small>Tạm dừng tất cả dịch tự động</small></span></label>
+  </fieldset>
+  <label class="textarea-label">Domain không tự dịch <span class="optional">mỗi dòng một tên miền; áp dụng cho chế độ Tất cả</span><textarea id="excludedDomains" rows="4" spellcheck="false"></textarea></label>
+  <div class="tip caution">Bật Auto có thể gửi nội dung website đến API/model bạn cấu hình. Các trang nhạy cảm nên được loại trừ.</div>
+</section>
+
+<section class="settings-card" aria-labelledby="h-sites">
+  <div class="card-title"><div><h2 id="h-sites">Website đã chọn</h2><p>Lưu lâu dài theo tên miền, kể cả khi đóng trình duyệt.</p></div><span id="site-count" class="pill">0 website</span></div>
+  <form id="add-site-form" class="site-add"><input id="new-site" aria-label="Tên miền" type="text" placeholder="Ví dụ: nodeseek.com" autocomplete="off" spellcheck="false"><button class="secondary" type="submit">Thêm</button></form>
+  <div id="site-list" class="site-list" aria-live="polite"><span class="help">Chưa có website nào được chọn.</span></div>
+  <div id="site-list-status" class="help" role="status" aria-live="polite"></div>
+  <div class="tip">Trong chế độ <strong>Chỉ website đã chọn</strong>, chỉ các domain trong danh sách này được tự dịch. Có thể bật/tắt từng trang bằng popup tiện ích.</div>
+</section>
+
+<section class="settings-card" aria-labelledby="h-stats">
+  <div class="card-title"><div><h2 id="h-stats">Thống kê API</h2><p>Từ lần khởi động trình duyệt hoặc lần đặt lại gần nhất. Chỉ lưu trong bộ nhớ phiên, không gửi đi đâu.</p></div><span id="metrics-concurrency" class="pill">—</span></div>
+  <div class="metrics-grid" id="metrics-grid" aria-live="polite"></div>
+  <div class="actions"><button id="metrics-refresh" class="secondary" type="button">Làm mới</button><button id="metrics-reset" class="secondary" type="button">Đặt lại số liệu</button></div>
+</section>
+
+<section class="settings-card" aria-labelledby="h-prompt">
+  <div class="card-title"><div><h2 id="h-prompt">Prompt &amp; cache</h2><p>Mặc định: trung thực, tự nhiên, giữ nguyên thuật ngữ IT, số liệu, URL, tên model; chống prompt injection từ trang web.</p></div></div>
+  <details><summary>Thay thế prompt nâng cao (tùy chọn)</summary><textarea id="customPrompt" rows="9" spellcheck="false" placeholder="Để trống để dùng prompt đã tối ưu..."></textarea><p class="help">Prompt tùy chỉnh thay thế toàn bộ prompt mặc định và dùng định dạng cũ: nhận mảng <code>{id,text,context}</code>, trả mảng <code>[{"id","vi"}]</code>. Tự lưu sau khi ngừng nhập.</p></details>
+  <div class="actions"><button id="clear-cache" class="secondary danger">Xóa cache dịch</button><span id="cache-status"></span></div>
+</section>
+
+</main>
+<footer class="page-foot">VietWeb AI · Manifest V3 · Không analytics · Không thu thập lịch sử duyệt web · Dữ liệu dịch chỉ gửi tới endpoint đã chọn</footer>
+</div>
+<script src="shared.js"></script><script src="options.js"></script>
+</body>
+</html>
