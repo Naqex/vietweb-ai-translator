@@ -84,21 +84,33 @@ function openDB() {
   });
   return dbPromise;
 }
-async function cacheGet(key) {
+const CACHE_TOUCH_MS = 60e3;
+// Reads a whole batch in one transaction and refreshes `at` of the hits in a second one, so trimming is true LRU.
+async function cacheGetMany(keys) {
+  const out = keys.map(() => null);
   try {
     const db = await openDB();
-    const entry = await new Promise((resolve, reject) => {
-      const req = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(key);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => reject(req.error);
+    const entries = await new Promise((resolve, reject) => {
+      const store = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME);
+      const found = new Array(keys.length).fill(null); let left = keys.length;
+      if (!left) return resolve(found);
+      keys.forEach((key, i) => {
+        const req = store.get(key);
+        req.onsuccess = () => { found[i] = req.result || null; if (!--left) resolve(found); };
+        req.onerror = () => reject(req.error);
+      });
     });
-    if (!entry) return null;
-    // Refresh the timestamp occasionally so trimming is LRU rather than FIFO.
-    if (Date.now() - entry.at > 3600e3) {
-      try { db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).put({...entry, at: Date.now()}); } catch {}
+    const now = Date.now(), stale = [];
+    entries.forEach((entry, i) => {
+      if (!entry) return;
+      out[i] = entry.value ?? null;
+      if (now - entry.at > CACHE_TOUCH_MS) stale.push({...entry, at: now});
+    });
+    if (stale.length) {
+      try { const store = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME); for (const e of stale) store.put(e); } catch {}
     }
-    return entry.value ?? null;
-  } catch { return null; } // cache failure never prevents translation
+  } catch { /* cache failure never prevents translation */ }
+  return out;
 }
 async function cachePut(key, value, limit) {
   try {
@@ -491,7 +503,7 @@ async function translateBatch(rows, ctx) {
   const namespace = [CACHE_VERSION, conf.endpoint, conf.model, prompt, 'auto', 'vi'].join('\u001e');
   const keys = await Promise.all(rows.map(r => hashString(namespace + '\u001e' + r.text +
     (r.text.length < 100 ? '\u001e' + (r.context || '').slice(0, 450) : ''))));
-  const cached = await Promise.all(keys.map(cacheGet));
+  const cached = await cacheGetMany(keys);
   const done = new Map(); let hits = 0;
   const misses = [];
   for (let i = 0; i < rows.length; i++) {

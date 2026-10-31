@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.1 — True LRU cache, single scan pipeline
+
+- **Cache is now true LRU**: a batch is read in one IndexedDB transaction (`cacheGetMany`) and hits are re-stamped in a second one (only if older than 60s, to avoid write amplification). `trimCache` evicts the least recently *used* entries instead of the oldest written. Test: `tests/cache_lru_smoke.py` (real Chromium IndexedDB).
+- **Mutation → scan merged**: MutationObserver records go straight into one `pendingScan` set drained by a single 80ms trailing timer (was two stages, ~180ms). Nodes already covered by a queued ancestor are skipped (Set-based, no O(n²)).
+
 ## 1.4.0 — Apple-style UI, streaming, measured Gemini defaults
 
 - **Streaming**: the service worker reads SSE from CLIProxyAPI and pushes each finished fragment to the tab (`VIWEB_PARTIAL`) so text appears while the batch is still generating. A broken stream keeps the fragments already received and re-requests only the missing ones. Falls back to plain JSON if the proxy does not stream. Toggle: Options → Hiệu năng → Streaming.

@@ -352,19 +352,26 @@
       rootMargin: `${Math.max(100, Number(settings.prefetchPixels) || 700)}px 0px`
     });
   }
-  function scheduleScan(nodes) {
-    for (const node of nodes) pendingScan.add(node);
-    if (scanTimer) return; // coalesce bursts instead of discarding earlier DOM mutations
-    scanTimer = setTimeout(() => {
-      scanTimer = null;
-      const nodes = Array.from(pendingScan); pendingScan.clear();
-      for (const node of nodes) if (node.isConnected) scan(node);
-    }, 180);
+  // One pipeline: mutation records go straight into pendingScan; a single trailing timer drains it.
+  function drainScan() {
+    scanTimer = null;
+    const nodes = Array.from(pendingScan); pendingScan.clear();
+    const queued = new Set(nodes);
+    for (const node of nodes) {
+      if (!node.isConnected) continue;
+      // Skip nodes already covered by a queued ancestor: scan(ancestor) walks them anyway.
+      let covered = false;
+      for (let p = node.parentNode; p && !covered; p = p.parentNode) covered = queued.has(p);
+      if (!covered) scan(node);
+    }
+  }
+  function queueScan(node) {
+    pendingScan.add(node);
+    if (!scanTimer) scanTimer = setTimeout(drainScan, 80);
   }
   function begin() {
     if (mutation) return;
     createIntersection();
-    const pending = new Set();
     mutation = new MutationObserver(records => {
       if (!enabled) return;
       if (lastUrl !== location.href) {
@@ -374,17 +381,14 @@
       for (const r of records) {
         if (r.type === 'attributes') {
           // Own attribute updates are ignored by trackAttributes when equal to original/translation.
-          pending.add(r.target);
+          queueScan(r.target);
         } else if (r.type === 'characterData') {
           const entry = states.get(r.target);
           if (entry && (r.target.nodeValue === entry.original || r.target.nodeValue === entry.translation)) continue;
-          pending.add(r.target);
+          queueScan(r.target);
         } else {
-          for (const n of r.addedNodes) pending.add(n);
+          for (const n of r.addedNodes) queueScan(n);
         }
-      }
-      if (pending.size) {
-        const nodes = Array.from(pending); pending.clear(); scheduleScan(nodes);
       }
       if (tracked.size > 1500) {
         for (const e of tracked) if (!e.node.isConnected) tracked.delete(e);
