@@ -3,6 +3,7 @@
 ## 1.4.1 — True LRU cache, single scan pipeline
 
 - **Cache is now true LRU**: a batch is read in one IndexedDB transaction (`cacheGetMany`) and hits are re-stamped in a second one (only if older than 60s, to avoid write amplification). `trimCache` evicts the least recently *used* entries instead of the oldest written. Test: `tests/cache_lru_smoke.py` (real Chromium IndexedDB).
+- **Prompt**: numbers are copied exactly ("3000" no longer becomes "3 triệu"); live e2e now 100% preserved / 100% complete.
 - **Mutation → scan merged**: MutationObserver records go straight into one `pendingScan` set drained by a single 80ms trailing timer (was two stages, ~180ms). Nodes already covered by a queued ancestor are skipped (Set-based, no O(n²)).
 
 ## 1.4.0 — Apple-style UI, streaming, measured Gemini defaults

@@ -30,6 +30,7 @@ Output ONLY one JSON object mapping each n (as string) to its Vietnamese transla
 Rules:
 - Fluent, idiomatic Vietnamese that matches the source register (casual forum/social slang stays casual; documentation stays precise). Never translate word-for-word.
 - Preserve meaning, negation, hedging, sarcasm, numbers, prices, currency, units, dates, emoji, punctuation, line breaks, usernames, @mentions, #hashtags, $TICKERS, URLs, emails, file paths, commands, code, versions and model/product/brand names.
+- Copy every number exactly as written ("3000" stays "3000", never "3 nghìn" or "3 triệu"); never convert, round, reformat or rescale numbers, prices, currencies or units.
 - Keep standard English tech terms Vietnamese developers use (API, token, GPU, prompt, commit, server, cache...). Translate other terms naturally.
 - Chinese net slang: 楼主→chủ thớt, 大佬→đại ca/cao nhân, 求助→nhờ giúp đỡ, 水贴→bài xàm, 内卷→cuộc đua nội bộ (nội quyển), 薅羊毛→săn khuyến mãi.
 - EVERY fragment written in English, Chinese, Japanese, Korean or any other language MUST be translated into Vietnamese, including short, casual or mixed-language ones ("Thanks!" -> "Cảm ơn!"). Translate the natural-language part and keep embedded @mentions, #tags, $tickers, URLs, code and versions as they are.
