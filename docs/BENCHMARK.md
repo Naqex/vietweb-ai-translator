@@ -54,6 +54,19 @@ Trang thử chỉ có ~5 batch nên 4 và 8 ngang nhau; trang dài hơn hưởng
 
 **Quyết định:** `gemini-3-flash` làm model chính, `gemini-3.5-flash-lite` dự phòng (429/hết quota). Muốn văn phong tốt nhất, chấp nhận chậm hơn: `gemini-3.8-flash-high(low)`.
 
+## Dịch ảnh (thăm dò `tests/media_probe.py`)
+
+Một ảnh 800×450 có chữ, một lời gọi trả về `box_2d` ([ymin,xmin,ymax,xmax], thang 0–1000), chữ gốc và bản dịch. Mọi model Gemini thử đều nhận `image_url` (data URL) và trả vị trí đúng.
+
+| Model | Độ trễ | Nhận xét |
+|---|---|---|
+| `gemini-3-flash` | ~1,5 s | Đúng toàn bộ, dịch cả đơn vị tiền tệ — **mặc định** |
+| `gemini-3.5-flash-lite` | ~1,5 s | Đúng, dự phòng |
+| `gemini-3.1-flash-lite` | ~1,5 s | Nhanh nhưng để nguyên "yuan" |
+| `gemini-3.8-flash-high` | ~5,8 s | Chậm hơn ~4 lần, cũng để nguyên "yuan" |
+
+Chi phí ≈ 1.150 token đầu vào cho ảnh 800×450. Cache theo nội dung ảnh nên ảnh lặp lại tốn 0 token. YouTube `timedtext` gọi trực tiếp trả 0 byte (cần `pot`), nên extension nghe response của chính trình phát.
+
 ## Chạy lại
 
 ```

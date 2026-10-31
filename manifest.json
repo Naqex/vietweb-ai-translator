@@ -2,9 +2,9 @@
   "manifest_version": 3,
   "name": "VietWeb AI Translator — CLIProxyAPI",
   "short_name": "VietWeb AI",
-  "version": "1.4.3",
-  "version_name": "1.4.3-cache-reuse",
-  "description": "Dịch trang web sang tiếng Việt qua CLIProxyAPI: hiển thị theo luồng (streaming), ưu tiên vùng nhìn thấy, giao diện kiểu Apple.",
+  "version": "1.6.0",
+  "version_name": "1.6.0-youtube-image",
+  "description": "Dịch trang web, phụ đề YouTube và chữ trong ảnh sang tiếng Việt qua CLIProxyAPI: streaming, cache dùng lại, giao diện kiểu Apple.",
   "icons": {
     "16": "icons/16.png",
     "32": "icons/32.png",
@@ -13,7 +13,8 @@
   },
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "contextMenus"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -32,6 +33,45 @@
       "run_at": "document_idle",
       "all_frames": true,
       "match_about_blank": true
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "media_common.js",
+        "image.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://music.youtube.com/*",
+        "https://www.youtube-nocookie.com/embed/*"
+      ],
+      "js": [
+        "youtube_main.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://music.youtube.com/*",
+        "https://www.youtube-nocookie.com/embed/*"
+      ],
+      "js": [
+        "media_common.js",
+        "youtube.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
     }
   ],
   "action": {

@@ -73,6 +73,38 @@
   <div class="tip">Trong chế độ <strong>Chỉ website đã chọn</strong>, chỉ các domain trong danh sách này được tự dịch. Có thể bật/tắt từng trang bằng popup tiện ích.</div>
 </section>
 
+<section class="settings-card" aria-labelledby="h-yt">
+  <div class="card-title"><div><h2 id="h-yt">Phụ đề YouTube</h2><p>Dịch phụ đề có sẵn (kể cả phụ đề tự động) sang tiếng Việt, hiện ngay trên video. Video không có phụ đề thì không dịch.</p></div><span class="pill violet">Mới</span></div>
+  <fieldset class="auto-modes" aria-label="Chế độ phụ đề YouTube">
+    <label><input type="radio" name="youtubeMode" value="bilingual"><span><strong>Song ngữ</strong><small>Câu gốc nhỏ phía trên, bản dịch tiếng Việt lớn phía dưới</small></span></label>
+    <label><input type="radio" name="youtubeMode" value="translated"><span><strong>Chỉ tiếng Việt</strong><small>Thay hẳn phụ đề gốc bằng bản dịch</small></span></label>
+    <label><input type="radio" name="youtubeMode" value="off"><span><strong>Tắt</strong><small>Giữ nguyên phụ đề của YouTube</small></span></label>
+  </fieldset>
+  <div class="fields" style="margin-top:18px">
+    <label>Cỡ chữ phụ đề<select id="youtubeSize"><option value="small">Nhỏ</option><option value="medium">Vừa</option><option value="large">Lớn</option></select></label>
+    <label>Dịch trước<select id="youtubeAhead"><option value="60">60 giây</option><option value="150">150 giây (khuyên dùng)</option><option value="300">5 phút</option><option value="600">10 phút</option></select></label>
+  </div>
+  <div class="switch-row"><div><strong>Tự bật phụ đề (CC)</strong><span class="help">Nếu video chưa bật phụ đề, tiện ích tự bật CC để lấy được nội dung cần dịch. Tắt mục này nếu bạn muốn tự quyết định bật CC.</span></div><label class="toggle" aria-label="Tự bật phụ đề"><input id="youtubeAutoCC" type="checkbox"><span></span></label></div>
+  <div class="tip">Chỉ dịch trước đoạn quanh vị trí đang xem (theo mục “Dịch trước”) và dịch lại khi tua. Mỗi câu dịch rồi được lưu cache, nên xem lại video hoặc phụ đề trùng lặp <strong>không tốn thêm token</strong>. Dịch trước càng dài thì càng mượt nhưng tốn token ngay cả khi bạn thoát video sớm.</div>
+</section>
+
+<section class="settings-card" aria-labelledby="h-img">
+  <div class="card-title"><div><h2 id="h-img">Dịch chữ trong ảnh</h2><p>Nhận diện chữ trong ảnh, dịch và vẽ bản dịch đè lên đúng vị trí (truyện tranh, ảnh chụp màn hình, banner…). Dùng model có khả năng đọc ảnh, ví dụ Gemini.</p></div><span class="pill violet">Mới</span></div>
+  <fieldset class="auto-modes" aria-label="Chế độ dịch ảnh">
+    <label><input type="radio" name="imageMode" value="hover"><span><strong>Khi di chuột</strong><small>Hiện nút “Dịch ảnh” ở góc ảnh; chỉ dịch ảnh bạn chọn (ngoài ra có thể bấm chuột phải → “Dịch ảnh này”)</small></span></label>
+    <label><input type="radio" name="imageMode" value="auto"><span><strong>Tự động</strong><small>Tự dịch ảnh khi cuộn tới, giới hạn số ảnh mỗi trang</small></span></label>
+    <label><input type="radio" name="imageMode" value="off"><span><strong>Tắt</strong><small>Không hiện nút và không dịch ảnh</small></span></label>
+  </fieldset>
+  <div class="fields" style="margin-top:18px">
+    <label>Kiểu hiển thị<select id="imageStyle"><option value="replace">Thay thế chữ gốc (hoà màu nền)</option><option value="subtle">Nền tối bán trong suốt</option></select></label>
+    <label>Độ phân giải gửi đi<select id="imageMaxSide"><option value="1024">1024 px (tiết kiệm)</option><option value="1536">1536 px (khuyên dùng)</option><option value="2048">2048 px (chữ rất nhỏ)</option></select></label>
+    <label>Kích thước ảnh tối thiểu (px)<input id="imageMinSize" type="number" min="64" max="1000" step="10"></label>
+    <label>Giới hạn ảnh tự dịch / trang<input id="imageAutoLimit" type="number" min="0" max="100" step="1"></label>
+    <label class="full">Model riêng cho ảnh <span class="optional">tuỳ chọn · để trống = dùng model chính và model dự phòng</span><input id="imageModel" list="model-list" spellcheck="false" autocomplete="off" placeholder="gemini-3-flash"></label>
+  </div>
+  <div class="tip caution">Mỗi ảnh tốn khoảng 1–2 nghìn token đầu vào. Chế độ Tự động trên trang nhiều ảnh có thể tốn nhiều quota, nên giữ giới hạn thấp. Cùng một ảnh dịch lại sẽ lấy từ cache, không gọi API.</div>
+</section>
+
 <section class="settings-card" aria-labelledby="h-stats">
   <div class="card-title"><div><h2 id="h-stats">Thống kê API</h2><p>Từ lần khởi động trình duyệt hoặc lần đặt lại gần nhất. Chỉ lưu trong bộ nhớ phiên, không gửi đi đâu.</p></div><span id="metrics-concurrency" class="pill">—</span></div>
   <div class="metrics-grid" id="metrics-grid" aria-live="polite"></div>

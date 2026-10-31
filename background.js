@@ -35,7 +35,7 @@ function modelList(conf) {
 /* ---------- metrics (kept in storage.session so they never trigger settings resync) ---------- */
 const metrics = {since: Date.now(), requests: 0, ok: 0, failed: 0, retries: 0, rateLimited: 0, tokensIn: 0,
   tokensOut: 0, cacheHits: 0, cacheMisses: 0, missing: 0, fallbacks: 0, cancelled: 0, hedges: 0, hedgeWins: 0,
-  savedInChars: 0, savedOutChars: 0, latencies: []};
+  savedInChars: 0, savedOutChars: 0, images: 0, imageHits: 0, latencies: []};
 let metricsSaveTimer = null;
 const metricsReady = (async () => {
   try {
@@ -66,7 +66,7 @@ function metricsSummary() {
 function resetMetrics() {
   Object.assign(metrics, {since: Date.now(), requests: 0, ok: 0, failed: 0, retries: 0, rateLimited: 0,
     tokensIn: 0, tokensOut: 0, cacheHits: 0, cacheMisses: 0, missing: 0, fallbacks: 0, cancelled: 0, hedges: 0, hedgeWins: 0,
-    savedInChars: 0, savedOutChars: 0, latencies: []});
+    savedInChars: 0, savedOutChars: 0, images: 0, imageHits: 0, latencies: []});
   touchMetrics();
 }
 
@@ -664,7 +664,127 @@ async function fetchModels() {
   } finally { clearTimeout(timeout); }
 }
 
-const MESSAGES = ['VIWEB_TRANSLATE', 'VIWEB_TEST', 'VIWEB_CLEAR_CACHE', 'VIWEB_CANCEL', 'VIWEB_METRICS', 'VIWEB_METRICS_RESET', 'VIWEB_MODELS'];
+/* ---------- image translation: OCR + boxes + Vietnamese in one multimodal call, cached by image hash ---------- */
+const IMAGE_CACHE_REV = 1;
+const IMAGE_DATA_RE = /^data:image\/(?:jpeg|png|webp|gif);base64,/;
+function parseRegions(raw) {
+  const str = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  let parsed;
+  try { parsed = JSON.parse(str); }
+  catch {
+    const start = str.indexOf('['), end = str.lastIndexOf(']');
+    if (start < 0 || end <= start) throw malformed('AI không trả JSON hợp lệ cho ảnh.');
+    try { parsed = JSON.parse(str.slice(start, end + 1)); }
+    catch { throw malformed('AI không trả JSON hợp lệ cho ảnh.'); }
+  }
+  if (!Array.isArray(parsed)) parsed = parsed?.regions || parsed?.items || parsed?.texts;
+  if (!Array.isArray(parsed)) throw malformed('Định dạng kết quả ảnh không hợp lệ.');
+  const regions = [];
+  for (const item of parsed) {
+    const box = item?.box_2d || item?.box;
+    const vi = typeof item?.vi === 'string' ? item.vi.trim() : '';
+    const src = typeof item?.src === 'string' ? item.src.trim() : '';
+    if (!Array.isArray(box) || box.length !== 4 || !vi) continue;
+    const [y0, x0, y1, x1] = box.map(n => Math.max(0, Math.min(1000, Math.round(Number(n)))));
+    if (![y0, x0, y1, x1].every(Number.isFinite) || y1 - y0 < 4 || x1 - x0 < 4) continue;
+    if (src && normalizeForKey(src) === normalizeForKey(vi)) continue; // unchanged: nothing to draw
+    regions.push({b: [y0, x0, y1, x1], s: src.slice(0, 600), v: vi.slice(0, 1200)});
+    if (regions.length >= 80) break;
+  }
+  return regions;
+}
+function imageModels(conf) {
+  const own = String(conf.imageModel || '').trim();
+  return [...new Set([...(own ? [own] : []), ...modelList(conf)])];
+}
+async function imageCall(data, conf, model, ctx) {
+  const url = validateEndpoint(conf.endpoint);
+  const hint = ctx.page?.title ? `Page title (context only): ${ctx.page.title}` : 'Image from a web page.';
+  const body = {model, stream: false, temperature: 0, max_tokens: 8192, messages: [{role: 'user', content: [
+    {type: 'text', text: VIWEB_IMAGE_PROMPT + '\n' + hint}, {type: 'image_url', image_url: {url: data}}]}]};
+  metrics.requests++;
+  const started = Date.now();
+  let json;
+  try { json = await post(url, body, conf, ctx, null, null); }
+  catch (err) {
+    if (err.cancelled) { metrics.requests--; touchMetrics(); throw err; }
+    metrics.failed++;
+    if (err.status === 429) { metrics.rateLimited++; onRateLimit(err.retryAfter); }
+    touchMetrics();
+    throw err;
+  }
+  metrics.latencies.push(Date.now() - started);
+  if (metrics.latencies.length > 200) metrics.latencies.shift();
+  metrics.tokensIn += Number(json?.usage?.prompt_tokens) || 0;
+  metrics.tokensOut += Number(json?.usage?.completion_tokens) || 0;
+  const content = safeText(json?.choices?.[0]?.message?.content);
+  if (!content) { metrics.failed++; touchMetrics(); throw malformed('API trả kết quả rỗng cho ảnh.'); }
+  let regions;
+  try { regions = parseRegions(content); } catch (err) { metrics.failed++; touchMetrics(); throw err; }
+  metrics.ok++; onSuccess(); touchMetrics();
+  return regions;
+}
+async function imageRetry(data, conf, ctx) {
+  let last;
+  for (const model of imageModels(conf)) {
+    for (let a = 0; a < 2; a++) {
+      try { return await schedule(ctx.owner, () => imageCall(data, conf, model, ctx), 0); }
+      catch (err) {
+        last = err;
+        if (err.cancelled || err.status === 401 || err.status === 403) throw err;
+        const retryable = err.malformed || !err.status || err.status === 408 || err.status === 429 || err.status >= 500;
+        if (!retryable) break;
+        metrics.retries++;
+        await backoff(Math.max(500 * (a + 1), Math.min(err.retryAfter || 0, 10000)));
+      }
+    }
+    metrics.fallbacks++;
+  }
+  throw last || new Error('Không dịch được ảnh.');
+}
+async function translateImage(msg, ctx) {
+  const conf = await settings();
+  if (typeof msg.data !== 'string' || !IMAGE_DATA_RE.test(msg.data) || msg.data.length > 14e6) throw new Error('Ảnh không hợp lệ hoặc quá lớn.');
+  configureConcurrency(Math.max(1, Math.min(8, Number(conf.concurrentRequests) || 3)));
+  const key = await hashString(['img', CACHE_VERSION, IMAGE_CACHE_REV, imageModels(conf)[0], await hashString(msg.data)].join('\u001e'));
+  const [hit] = await cacheGetMany([key]);
+  if (typeof hit === 'string') {
+    try { const regions = JSON.parse(hit); metrics.imageHits++; touchMetrics(); return {regions, cached: true}; } catch { /* corrupt entry: recompute */ }
+  }
+  const regions = await imageRetry(msg.data, conf, ctx);
+  metrics.images++; touchMetrics();
+  await cachePutMany([{key, value: JSON.stringify(regions)}], conf.cacheLimit);
+  return {regions, cached: false};
+}
+// Cross-origin images cannot be read by the page's content script; the service worker has host permissions.
+async function fetchImageData(url) {
+  const target = new URL(String(url));
+  if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Chỉ hỗ trợ ảnh http(s).');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const resp = await fetch(target.href, {signal: controller.signal, credentials: 'include'});
+    if (!resp.ok) throw new Error(`Tải ảnh lỗi ${resp.status}.`);
+    const type = (resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!type.startsWith('image/')) throw new Error('URL không phải ảnh.');
+    const bytes = new Uint8Array(await resp.arrayBuffer());
+    if (bytes.length > 12e6) throw new Error('Ảnh quá lớn (>12MB).');
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return `data:${type};base64,${btoa(binary)}`;
+  } finally { clearTimeout(timer); }
+}
+try {
+  chrome.runtime.onInstalled?.addListener(() => {
+    chrome.contextMenus?.removeAll?.(() => chrome.contextMenus.create({id: 'viweb-image', title: 'Dịch ảnh này sang tiếng Việt', contexts: ['image']}));
+  });
+  chrome.contextMenus?.onClicked?.addListener((info, tab) => {
+    if (info.menuItemId !== 'viweb-image' || !tab?.id) return;
+    Promise.resolve(chrome.tabs.sendMessage(tab.id, {type: 'VIWEB_IMAGE_CONTEXT', srcUrl: info.srcUrl}, {frameId: info.frameId ?? 0})).catch(() => {});
+  });
+} catch { /* context menu is optional */ }
+
+const MESSAGES = ['VIWEB_TRANSLATE', 'VIWEB_TEST', 'VIWEB_CLEAR_CACHE', 'VIWEB_CANCEL', 'VIWEB_METRICS', 'VIWEB_METRICS_RESET', 'VIWEB_MODELS', 'VIWEB_IMAGE', 'VIWEB_FETCH_IMAGE'];
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg?.type === 'VIWEB_FRAME_CONTEXT') {
     // The top-level tab URL comes from Chrome, not untrusted page JavaScript.
@@ -687,6 +807,12 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       try { site = new URL(sender.url || sender.tab?.url || '').hostname.toLowerCase(); } catch {}
       return await translateBatch(msg.rows, newContext(owner, msg.page,
         {batchId: msg.batchId, priority: msg.priority, tabId: sender.tab?.id, frameId: sender.frameId, site}));
+    }
+    if (msg.type === 'VIWEB_FETCH_IMAGE') return {data: await fetchImageData(msg.url)};
+    if (msg.type === 'VIWEB_IMAGE') {
+      let site = '';
+      try { site = new URL(sender.url || sender.tab?.url || '').hostname.toLowerCase(); } catch {}
+      return await translateImage(msg, newContext(owner, msg.page, {priority: 0, tabId: sender.tab?.id, frameId: sender.frameId, site}));
     }
     if (msg.type === 'VIWEB_CLEAR_CACHE') { await clearCache(); return {cleared:true}; }
     const conf = await settings();

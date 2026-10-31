@@ -4,6 +4,7 @@
 (() => {
   const $ = id => document.getElementById(id);
   const perfKeys = ['concurrentRequests', 'maxBatchChars', 'maxBatchItems', 'firstBatchItems', 'timeoutSeconds', 'prefetchPixels'];
+  const clamp = (value, min, max, fallback) => { const n = Math.round(Number(value)); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; };
   let conf = {...VIWEB_DEFAULTS};
   let preset = 'balanced';
   let initialized = false;
@@ -33,6 +34,17 @@
     $('excludedDomains').value = conf.excludedDomains;
     $('customPrompt').value = conf.customPrompt;
     document.querySelector('input[name=autoMode][value=' + conf.autoMode + ']').checked = true;
+    const radio = (name, value, fallback) => (document.querySelector(`input[name=${name}][value="${value}"]`) || document.querySelector(`input[name=${name}][value="${fallback}"]`)).checked = true;
+    radio('youtubeMode', conf.youtubeMode, 'bilingual');
+    radio('imageMode', conf.imageMode, 'hover');
+    $('youtubeSize').value = conf.youtubeSize;
+    $('youtubeAhead').value = String(conf.youtubeAhead);
+    $('youtubeAutoCC').checked = conf.youtubeAutoCC !== false;
+    $('imageStyle').value = conf.imageStyle;
+    $('imageMaxSide').value = String(conf.imageMaxSide);
+    $('imageMinSize').value = conf.imageMinSize;
+    $('imageAutoLimit').value = conf.imageAutoLimit;
+    $('imageModel').value = conf.imageModel || '';
     $('parallel-value').textContent = conf.concurrentRequests;
     $('chars-value').textContent = Number(conf.maxBatchChars).toLocaleString('vi-VN');
     $('first-value').textContent = conf.firstBatchItems;
@@ -55,7 +67,17 @@
       hedging: $('hedging').checked,
       apiKey: $('apiKey').value.trim(),
       excludedDomains: $('excludedDomains').value.trim(),
-      customPrompt: $('customPrompt').value.trim()
+      customPrompt: $('customPrompt').value.trim(),
+      youtubeMode: document.querySelector('input[name=youtubeMode]:checked')?.value || 'bilingual',
+      youtubeSize: $('youtubeSize').value || 'medium',
+      youtubeAhead: clamp($('youtubeAhead').value, 30, 900, 150),
+      youtubeAutoCC: $('youtubeAutoCC').checked,
+      imageMode: document.querySelector('input[name=imageMode]:checked')?.value || 'hover',
+      imageStyle: $('imageStyle').value || 'replace',
+      imageMaxSide: clamp($('imageMaxSide').value, 512, 4096, 1536),
+      imageMinSize: clamp($('imageMinSize').value, 64, 1000, 160),
+      imageAutoLimit: clamp($('imageAutoLimit').value, 0, 100, 12),
+      imageModel: $('imageModel').value.trim()
     };
     for (const key of perfKeys) value[key] = conf[key];
     return value;
@@ -116,10 +138,12 @@
   $('save-performance').addEventListener('click', () => {
     if (initialized) void persist().catch(() => {});
   });
-  for (const id of ['endpoint', 'model', 'fallbackModels', 'apiKey', 'excludedDomains', 'customPrompt']) {
+  for (const id of ['endpoint', 'model', 'fallbackModels', 'apiKey', 'excludedDomains', 'customPrompt', 'imageModel', 'imageMinSize', 'imageAutoLimit']) {
     $(id).addEventListener('input', () => changed(650));
     $(id).addEventListener('change', () => changed(0));
   }
+  for (const id of ['youtubeSize', 'youtubeAhead', 'imageStyle', 'imageMaxSide', 'youtubeAutoCC']) $(id).addEventListener('change', () => changed(0));
+  document.querySelectorAll('input[name=youtubeMode],input[name=imageMode]').forEach(input => input.addEventListener('change', () => changed(0)));
   $('streaming').addEventListener('change', () => changed(0));
   $('hedging').addEventListener('change', () => changed(0));
   document.querySelectorAll('input[name=autoMode]').forEach(input => input.addEventListener('change', () => changed(0))); 
@@ -166,7 +190,8 @@
         ['Cache hit', m.hitRate === null ? '—' : Math.round(m.hitRate * 100) + '% (' + fmt(m.cacheHits) + ')'],
         ['Token tiết kiệm nhờ cache (ước tính)', '≈ ' + fmt(m.tokensSaved)], ['Mục trong cache', fmt(m.cacheEntries)],
         ['Token vào / ra', `${fmt(m.tokensIn)} / ${fmt(m.tokensOut)}`],
-        ['Đoạn thiếu sau retry', fmt(m.missing)], ['Request bị hủy (đổi trang)', fmt(m.cancelled)]
+        ['Đoạn thiếu sau retry', fmt(m.missing)], ['Request bị hủy (đổi trang)', fmt(m.cancelled)],
+        ['Ảnh đã dịch', fmt(m.images)], ['Ảnh lấy từ cache', fmt(m.imageHits)]
       ];
       $('metrics-grid').replaceChildren(...cells.map(([label, value]) => {
         const box = document.createElement('div');

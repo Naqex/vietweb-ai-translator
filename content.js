@@ -5,7 +5,7 @@
     enabled: true, prefetchPixels: 700, maxBatchChars: 2600, maxBatchItems: 8, firstBatchItems: 5,
     excludedDomains: 'mail.google.com\naccounts.google.com\noutlook.live.com\noutlook.office.com\nlocalhost', visualMode: 'translate'
   };
-  const IGNORE = 'script,style,noscript,template,textarea,input,select,option,code,pre,kbd,samp,svg,math,canvas,video,audio,iframe,[contenteditable],[translate="no"],[aria-hidden="true"],[hidden],[inert],[role="textbox"],[role="input"],[data-vietweb-ignore],[data-private]';
+  const IGNORE = 'script,style,noscript,template,textarea,input,select,option,code,pre,kbd,samp,svg,math,canvas,video,audio,iframe,[contenteditable],[translate="no"],[aria-hidden="true"],[hidden],[inert],[role="textbox"],[role="input"],[data-vietweb-ignore],[data-private],html[data-vietweb-yt] .ytp-caption-window-container';
   const CHARACTER = /[\p{L}\p{N}]/u;
   const CJK = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/;
   const VIET_WORDS = /\b(?:không|những|người|được|chúng|tôi|mình|của|trong|tiếng|với|bạn|đang|nhưng|thường|nhiều|thông|điều|trường|việc|hướng)\b/iu;

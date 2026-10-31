@@ -8,7 +8,7 @@ const root = path.resolve(__dirname,'..');
 const script = fs.readFileSync(path.join(root,'shared.js'),'utf8')+'\n'+
   fs.readFileSync(path.join(root,'background.js'),'utf8').replace("importScripts('shared.js');",'')+
   '\nthis.__test={sched,schedule,metricsSummary,modelCooldown,StreamParser,hedge,metrics};';
-let calls=[], mode='ok', listener, tabMessages=[];
+let calls=[], mode='ok', listener, tabMessages=[], imageCalls=[], imageReply='[]';
 const config = {endpoint:'http://127.0.0.1:8317/v1',model:'gemini-3.8-flash(low)',fallbackModels:'gemini-3.8-flash-lite',
   apiKey:'unit-test-key',concurrentRequests:4,customPrompt:''};
 const response = (status, body, headers={}) => ({ok:status<400,status,headers:{get:k=>headers[k.toLowerCase()]??null},json:async()=>body});
@@ -34,6 +34,11 @@ function sse(text, {fail=false, usage=true}={}) {
 const fakeFetch = async (url, req) => {
   if (url.endsWith('/models')) return response(200,{data:[{id:'b-model'},{id:'a-model'}]});
   const input = JSON.parse(req.body);
+  if (Array.isArray(input.messages[0].content)) {
+    imageCalls.push(input);
+    if (input.model==='img-bad') return response(400,{error:{message:'model does not support images'}});
+    return completion(imageReply,{prompt_tokens:1100,completion_tokens:60});
+  }
   const user = JSON.parse(input.messages[1].content);
   const legacy = Array.isArray(user);
   const items = legacy ? user.map(x=>({n:x.id,t:x.text})) : user.items;
@@ -215,6 +220,32 @@ const row=(id,text,context='')=>({id,text,context});
   assert.deepEqual(models.models,['a-model','b-model']);
   const reject=await send({type:'VIWEB_TRANSLATE',rows:[{id:'fail',text:17,context:''}]});
   assert.equal(reject.ok,false);
+
+  // Image translation: one multimodal call, boxes validated/clamped, cached by image hash, model fallback
+  const IMG='data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ';
+  imageReply='```json\n[{"box_2d":[100,50,200,400],"src":"Hello","vi":"Xin chào"},{"box_2d":[0,0,2,2],"src":"x","vi":"y"},{"box_2d":[300,300,400,5000],"src":"Same","vi":"Same"},{"box_2d":[500,100,600,900],"src":"Price $5","vi":"Giá $5"}]\n```';
+  r=await send({type:'VIWEB_IMAGE',data:IMG,page:{title:'Shop'}});
+  assert.equal(r.ok,true,r.error);
+  assert.equal(r.cached,false);
+  assert.deepEqual([...r.regions.map(x=>x.v)],['Xin chào','Giá $5'],'tiny box and unchanged text dropped');
+  assert.deepEqual([...r.regions[0].b],[100,50,200,400]);
+  assert.equal(imageCalls.length,1);
+  assert.equal(imageCalls[0].messages[0].content[1].image_url.url,IMG);
+  assert.ok(imageCalls[0].messages[0].content[0].text.includes('box_2d'));
+  r=await send({type:'VIWEB_IMAGE',data:'http://evil.example/x.png'});
+  assert.equal(r.ok,false);
+  imageReply='[]'; const EMPTY=IMG+'AAAA';
+  r=await send({type:'VIWEB_IMAGE',data:EMPTY}); assert.equal(r.regions.length,0);
+  config.imageModel='img-bad'; imageCalls=[]; imageReply='[{"box_2d":[10,10,50,300],"src":"A","vi":"B"}]';
+  r=await send({type:'VIWEB_IMAGE',data:IMG+'BBBB'});
+  assert.equal(r.ok,true,r.error);
+  assert.deepEqual([...imageCalls.map(c=>c.model)],['img-bad','gemini-3.8-flash(low)'],'400 on the image model falls through to the main model');
+  config.imageModel='';
+  imageReply='not json at all'; imageCalls=[];
+  r=await send({type:'VIWEB_IMAGE',data:IMG+'CCCC'});
+  assert.equal(r.ok,false,'malformed output is reported, not cached');
+  const images=(await send({type:'VIWEB_METRICS'})).metrics;
+  assert.ok(images.images>=3);
 
   // Custom prompts keep the legacy id/array protocol
   calls=[]; config.customPrompt='Custom prompt. Output [{"id","vi"}].';

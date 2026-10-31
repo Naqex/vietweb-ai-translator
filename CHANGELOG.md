@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.6.0 — Image translation, full media settings
+
+- **Image translation** (`image.js`): hover any image ≥ `imageMinSize` px and press "Dịch ảnh", use the right-click menu "Dịch ảnh này sang tiếng Việt", or switch to auto mode (translates images as they scroll into view, capped by `imageAutoLimit` per page). One multimodal call returns OCR + bounding boxes + Vietnamese; the translation is drawn over the image with background/text colour sampled around each box and the font fitted to the box. Toggle original ⇄ translated without a new call; follows scroll/resize/`object-fit`.
+- Cross-origin images: canvas first, then page `fetch`, then a background fetch (`VIWEB_FETCH_IMAGE`) so hotlink/CORS-protected images still work.
+- **Image cache**: key = hash of the image content + model + prompt revision, so the same picture on any site costs 0 tokens; empty results are cached too. Options → Thống kê shows "Ảnh đã dịch" and "Ảnh lấy từ cache".
+- Model order for images: `imageModel` (if set) then the normal model list; 400/404 falls through, 401/403 stops.
+- **Settings UI**: two new cards — "Phụ đề YouTube" (mode, size, prefetch window, auto-enable CC) and "Dịch chữ trong ảnh" (mode, overlay style, max side, min size, auto limit, model). Everything autosaves and applies live, no reload.
+- New permission: `contextMenus`.
+- Tests: `image_smoke.py` (DOM overlay geometry, colours, scroll tracking, fallbacks, auto limit), `image_cache_smoke.py` (real IndexedDB), extended `background_smoke.js` and `options_autosave_smoke.js`, `media_probe.py` (probe of Gemini models on image/subtitle input).
+
+## 1.5.0 — YouTube subtitle translation
+
+- **Bilingual / Vietnamese-only subtitles** for videos that have captions (manual or auto-generated). `youtube_main.js` (MAIN world) listens to the player's own `/api/timedtext` responses — a plain fetch from the extension returns nothing because it needs a `pot` token — and passes them to `youtube.js`, which parses json3/srv3/srv1.
+- **Sliding-window prefetch**: only the next `youtubeAhead` seconds (default 150) are translated, in batches of ≤16 cues, ≤3 in flight; cues about to be shown get top priority; seeking re-targets the window. Short subtitle text is cache-scoped per site, so re-watching costs 0 tokens.
+- Own overlay (shadow DOM) inside the player; native captions are hidden while it is active. Live-caption fallback for streams without a timedtext track. Auto-enables CC when the video has no track loaded (can be turned off).
+- Vietnamese tracks and YouTube's own auto-translation (`tlang`) are ignored. Videos without any subtitles are out of scope.
+- Test: `youtube_smoke.py`.
+
 ## 1.4.3 — Translation cache reuse
 
 - **Better keys (cache v4)**: text is normalised (NFC, nbsp/space runs, trailing spaces) before hashing; the endpoint and the surrounding-context string are no longer part of the key. Long text (≥100 chars) is shared across all sites; short UI strings are scoped per site (hostname from Chrome's `sender.url`, not page JS). Hit rate on repeated UI strings and on pages whose neighbours change is much higher.

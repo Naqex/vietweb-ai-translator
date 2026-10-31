@@ -14,14 +14,21 @@ function elem(id){
   };
 }
 const elements={};
-const radios=['all','selected','off'].map(value=>Object.assign(elem('auto-'+value),{value}));
+const groups={autoMode:['all','selected','off'],youtubeMode:['bilingual','translated','off'],imageMode:['hover','auto','off']};
+const radioSets=Object.fromEntries(Object.entries(groups).map(([name,values])=>[name,values.map(value=>Object.assign(elem(name+'-'+value),{value}))]));
+const radios=radioSets.autoMode;
 const segments=['fast','balanced','quality'].map(value=>Object.assign(elem('segment-'+value),{dataset:{preset:value}}));
 const doc={
   getElementById:elem,
   createElement:tag=>elem('gen'+Math.random()),
-  querySelectorAll:sel=>sel==='.segment'?segments:sel==='input[name=autoMode]'?radios:[],
-  querySelector:sel=>sel==='input[name=autoMode]:checked'?radios.find(e=>e.checked):
-    radios.find(e=>sel.includes('value='+e.value+']'))
+  querySelectorAll:sel=>sel==='.segment'?segments:sel==='input[name=autoMode]'?radios:
+    sel==='input[name=youtubeMode],input[name=imageMode]'?[...radioSets.youtubeMode,...radioSets.imageMode]:[],
+  querySelector:sel=>{
+    const m=/^input\[name=(\w+)\](?::checked|\[value="?([\w]+)"?\])$/.exec(sel);
+    if(!m) return null;
+    const set=radioSets[m[1]];
+    return sel.endsWith(':checked')?set.find(e=>e.checked):set.find(e=>e.value===m[2]);
+  }
 };
 const chrome = {storage:{local:{
   get: async defaults=>Object.assign({}, defaults||{}, store),
@@ -45,7 +52,7 @@ async function until(fn){for(let t=0;t<450;t++){if(fn())return;await delay(5)}th
   assert.ok(elem('site-list').children.some(item=>item.children?.[0]?.textContent==='nodeseek.com'));
   // Select global policy and persist without hitting Save.
   radios.forEach(r=>r.checked=(r.value==='off'));
-  handlers['auto-off:change']();
+  handlers['autoMode-off:change']();
   await until(()=>store.autoMode==='off');
   // Add an allowlisted site and preserve existing modes.
   elem('new-site').value='reddit.com';
@@ -60,5 +67,30 @@ async function until(fn){for(let t=0;t<450;t++){if(fn())return;await delay(5)}th
   elem('customPrompt').value='Translate accurately to Vietnamese.';
   handlers['customPrompt:input']();
   await until(()=>store.customPrompt==='Translate accurately to Vietnamese.');
-  console.log('PASS: legacy migration, allowlist UI, performance presets and prompt autosave retain per-site settings');
+  // YouTube + image settings are fully editable and autosave without disturbing the rest.
+  assert.equal(elem('youtubeAhead').value,'150');
+  assert.ok(radioSets.youtubeMode[0].checked && radioSets.imageMode[0].checked,'defaults reflected in the UI');
+  radioSets.youtubeMode.forEach(r=>r.checked=(r.value==='translated'));
+  handlers['youtubeMode-translated:change']();
+  await until(()=>store.youtubeMode==='translated');
+  elem('youtubeSize').value='large'; handlers['youtubeSize:change']();
+  elem('youtubeAhead').value='300'; handlers['youtubeAhead:change']();
+  elem('youtubeAutoCC').checked=false; handlers['youtubeAutoCC:change']();
+  radioSets.imageMode.forEach(r=>r.checked=(r.value==='auto'));
+  handlers['imageMode-auto:change']();
+  elem('imageStyle').value='subtle'; handlers['imageStyle:change']();
+  elem('imageMaxSide').value='2048'; handlers['imageMaxSide:change']();
+  elem('imageMinSize').value='9999'; handlers['imageMinSize:change']();
+  elem('imageAutoLimit').value='25'; handlers['imageAutoLimit:change']();
+  elem('imageModel').value='gemini-3-flash'; handlers['imageModel:input']();
+  await until(()=>store.imageModel==='gemini-3-flash' && store.imageAutoLimit===25);
+  assert.equal(store.youtubeSize,'large');
+  assert.equal(store.youtubeAhead,300);
+  assert.equal(store.youtubeAutoCC,false);
+  assert.equal(store.imageMode,'auto');
+  assert.equal(store.imageStyle,'subtle');
+  assert.equal(store.imageMaxSide,2048);
+  assert.equal(store.imageMinSize,1000,'min size is clamped');
+  assert.equal(store.siteModes['reddit.com'],'auto');
+  console.log('PASS: legacy migration, allowlist UI, performance presets, prompt autosave, YouTube and image settings retain per-site settings');
 })().catch(e=>{console.error(e);process.exitCode=1;});

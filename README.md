@@ -4,7 +4,7 @@ Bản extension **Manifest V3 độc lập**, thiết kế để dịch website 
 
 ## Cài Brave / Chrome
 
-1. Giải nén `VietWeb-AI-Translator-v1.4.0.zip` vào một thư mục **cố định**.
+1. Giải nén `VietWeb-AI-Translator-v1.6.0.zip` vào một thư mục **cố định**.
 2. Mở `brave://extensions` (hoặc `chrome://extensions`), bật **Developer mode**.
 3. Chọn **Load unpacked / Tải tiện ích đã giải nén**, trỏ tới thư mục `VietWeb-AI-Translator` **chứa file `manifest.json`**.
 4. **Tắt extension dịch cũ** để không dịch trùng và gây đè DOM.
@@ -38,6 +38,15 @@ Khi nâng cấp từ bản cũ, nếu công tắc "Tự dịch website" đã t�
 - Cache dịch IndexedDB (LRU, mặc định 20.000 mục, tối đa 200.000) để không trả token cho nội dung đã dịch. Khóa gồm model, prompt và văn bản đã chuẩn hoá (bỏ khác biệt khoảng trắng/Unicode, không phụ thuộc endpoint hay ngữ cảnh xung quanh). Đoạn dài ≥100 ký tự dùng chung cho mọi website; đoạn ngắn (nút, nhãn UI) được tách theo website vì nghĩa phụ thuộc ngữ cảnh. Bản "chưa dịch" (model bỏ sót) không bị lưu vào cache. Options → Thống kê hiện số mục cache và ước tính token đã tiết kiệm.
 - Có thể hiện bản gốc ngay lập tức mà không gọi lại AI.
 - Mọi cấu hình và API Key được lưu **cục bộ** (`chrome.storage.local`), không nhúng vào mã nguồn và không sử dụng analytics.
+
+## Phụ đề YouTube và dịch ảnh (v1.5.0 – v1.6.0)
+
+Cả hai tùy chỉnh đầy đủ trong **Options → Phụ đề YouTube / Dịch chữ trong ảnh**, tự lưu và áp dụng ngay.
+
+- **Phụ đề YouTube**: chế độ *song ngữ / chỉ tiếng Việt / tắt*, cỡ chữ, khoảng dịch trước (60–600 giây), tự bật CC. Chỉ dịch phần sắp xem (cửa sổ trượt) nên tốn rất ít token; xem lại video cũ không tốn token (cache). Video không có phụ đề **không** được hỗ trợ.
+- **Dịch ảnh**: *Khi rê chuột* (nút "Dịch ảnh" hiện trên ảnh), *Tự động* (dịch ảnh khi cuộn tới, giới hạn số ảnh/trang), hoặc *Tắt*; thêm menu chuột phải "Dịch ảnh này sang tiếng Việt". Một lời gọi model đa phương thức trả về chữ gốc, vị trí và bản dịch; bản dịch được vẽ đè lên ảnh với màu nền/chữ lấy từ ảnh. Cache theo nội dung ảnh nên cùng một ảnh ở bất kỳ trang nào chỉ tốn token một lần. Có thể đặt model riêng cho ảnh (để trống = dùng danh sách model chung).
+- **Riêng tư**: ảnh được gửi (dạng JPEG base64) tới CLIProxyAPI/model upstream khi bạn dịch. Chế độ Tự động gửi nhiều ảnh trên trang bạn đang xem — hãy đặt giới hạn thấp hoặc dùng *Khi rê chuột* trên trang nhạy cảm. Quyền mới: `contextMenus`.
+- Chưa kiểm chứng trên YouTube/Brave thật (chỉ trang giả lập bằng Chromium): vị trí overlay so với thanh điều khiển, ASR đặc thù, ảnh có hotlink protection.
 
 ## Riêng tư / bảo mật
 
