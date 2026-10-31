@@ -35,7 +35,7 @@ Khi nâng cấp từ bản cũ, nếu công tắc "Tự dịch website" đã t�
 - Batch nhiều đoạn, số API request đồng thời có thể chỉnh bằng các preset Fast/Balanced/Quality.
 - Prompt chuyên dụng giữ nguyên tên model, code, thông số, dấu phủ định; xem nội dung website là dữ liệu không đáng tin.
 - Giữ liên kết, thẻ HTML và các ô nhập; không sử dụng `innerHTML` để thay thế nội dung website.
-- Có cache IndexedDB với key gồm endpoint, model, prompt, ngữ cảnh ngắn và văn bản; tránh dịch lại nếu nội dung trùng.
+- Cache dịch IndexedDB (LRU, mặc định 20.000 mục, tối đa 200.000) để không trả token cho nội dung đã dịch. Khóa gồm model, prompt và văn bản đã chuẩn hoá (bỏ khác biệt khoảng trắng/Unicode, không phụ thuộc endpoint hay ngữ cảnh xung quanh). Đoạn dài ≥100 ký tự dùng chung cho mọi website; đoạn ngắn (nút, nhãn UI) được tách theo website vì nghĩa phụ thuộc ngữ cảnh. Bản "chưa dịch" (model bỏ sót) không bị lưu vào cache. Options → Thống kê hiện số mục cache và ước tính token đã tiết kiệm.
 - Có thể hiện bản gốc ngay lập tức mà không gọi lại AI.
 - Mọi cấu hình và API Key được lưu **cục bộ** (`chrome.storage.local`), không nhúng vào mã nguồn và không sử dụng analytics.
 

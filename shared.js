@@ -13,7 +13,7 @@ const VIWEB_DEFAULTS = Object.freeze({
   maxBatchItems: 8,
   firstBatchItems: 5,
   timeoutSeconds: 45,
-  cacheLimit: 2500,
+  cacheLimit: 20000,
   prefetchPixels: 700,
   customPrompt: '',
   excludedDomains: 'mail.google.com\naccounts.google.com\noutlook.live.com\noutlook.office.com\nlocalhost',

@@ -164,6 +164,7 @@
         ['Latency p50 / p95', `${sec(m.p50)} / ${sec(m.p95)}`], ['Retry', fmt(m.retries)],
         ['Lỗi 429', fmt(m.rateLimited)], ['Chuyển model dự phòng', fmt(m.fallbacks)],
         ['Cache hit', m.hitRate === null ? '—' : Math.round(m.hitRate * 100) + '% (' + fmt(m.cacheHits) + ')'],
+        ['Token tiết kiệm nhờ cache (ước tính)', '≈ ' + fmt(m.tokensSaved)], ['Mục trong cache', fmt(m.cacheEntries)],
         ['Token vào / ra', `${fmt(m.tokensIn)} / ${fmt(m.tokensOut)}`],
         ['Đoạn thiếu sau retry', fmt(m.missing)], ['Request bị hủy (đổi trang)', fmt(m.cancelled)]
       ];

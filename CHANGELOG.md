@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.3 — Translation cache reuse
+
+- **Better keys (cache v4)**: text is normalised (NFC, nbsp/space runs, trailing spaces) before hashing; the endpoint and the surrounding-context string are no longer part of the key. Long text (≥100 chars) is shared across all sites; short UI strings are scoped per site (hostname from Chrome's `sender.url`, not page JS). Hit rate on repeated UI strings and on pages whose neighbours change is much higher.
+- **No cache poisoning**: an unchanged "translation" of real foreign text (CJK or ≥3 Latin words without Vietnamese diacritics) is shown but never stored.
+- **Bigger, cheaper cache**: default 20,000 entries (max 200,000, was 2,500/10,000); one transaction per batch write; trimming amortised with 10% headroom; LRU eviction.
+- **Visibility**: Options → Thống kê shows cache entries and estimated tokens saved.
+- Existing v3 entries are not reachable any more; they are the least recently used, so LRU trimming removes them first. Use "Xóa cache" to reclaim space immediately.
+- Test: `tests/cache_reuse_smoke.py` (real IndexedDB, counts model calls).
+
 ## 1.4.2 — Hedged requests
 
 - **Tail-latency hedging**: if a call outlives ~1.25 × the recent p95 (min 3s, max 20s, needs ≥8 samples), a second request is raced on the fallback model (or the same model when none is set). The first success wins and the loser is aborted. Partial text only streams from whichever call started first, so nothing flickers between models. Metrics: `hedges`, `hedgeWins`. Toggle: Options → Hiệu năng → "Chống request chậm" (`hedging`, default on). Test: `tests/background_smoke.js`.

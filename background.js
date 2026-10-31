@@ -3,7 +3,7 @@ importScripts('shared.js');
 
 const DB_NAME = 'vietweb-translation-cache';
 const STORE_NAME = 'translations';
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 let dbPromise = null;
 let cacheWrites = 0;
 const pendingKeys = new Map();
@@ -34,7 +34,8 @@ function modelList(conf) {
 
 /* ---------- metrics (kept in storage.session so they never trigger settings resync) ---------- */
 const metrics = {since: Date.now(), requests: 0, ok: 0, failed: 0, retries: 0, rateLimited: 0, tokensIn: 0,
-  tokensOut: 0, cacheHits: 0, cacheMisses: 0, missing: 0, fallbacks: 0, cancelled: 0, hedges: 0, hedgeWins: 0, latencies: []};
+  tokensOut: 0, cacheHits: 0, cacheMisses: 0, missing: 0, fallbacks: 0, cancelled: 0, hedges: 0, hedgeWins: 0,
+  savedInChars: 0, savedOutChars: 0, latencies: []};
 let metricsSaveTimer = null;
 const metricsReady = (async () => {
   try {
@@ -58,11 +59,14 @@ function metricsSummary() {
   const {latencies, ...rest} = metrics;
   const lookups = metrics.cacheHits + metrics.cacheMisses;
   return {...rest, samples: latencies.length, p50: percentile(latencies, 0.5), p95: percentile(latencies, 0.95),
+    // Rough estimate: ~3.5 chars/token for source text, ~2.5 for Vietnamese output.
+    tokensSaved: Math.round(metrics.savedInChars / 3.5 + metrics.savedOutChars / 2.5),
     hitRate: lookups ? metrics.cacheHits / lookups : null, concurrency: sched.limit, ceiling: sched.ceiling};
 }
 function resetMetrics() {
   Object.assign(metrics, {since: Date.now(), requests: 0, ok: 0, failed: 0, retries: 0, rateLimited: 0,
-    tokensIn: 0, tokensOut: 0, cacheHits: 0, cacheMisses: 0, missing: 0, fallbacks: 0, cancelled: 0, hedges: 0, hedgeWins: 0, latencies: []});
+    tokensIn: 0, tokensOut: 0, cacheHits: 0, cacheMisses: 0, missing: 0, fallbacks: 0, cancelled: 0, hedges: 0, hedgeWins: 0,
+    savedInChars: 0, savedOutChars: 0, latencies: []});
   touchMetrics();
 }
 
@@ -112,36 +116,62 @@ async function cacheGetMany(keys) {
   } catch { /* cache failure never prevents translation */ }
   return out;
 }
-async function cachePut(key, value, limit) {
+const CACHE_DEFAULT_LIMIT = 20000, CACHE_MAX_LIMIT = 200000;
+function cacheTarget(limit) { return Math.max(200, Math.min(CACHE_MAX_LIMIT, Number(limit) || CACHE_DEFAULT_LIMIT)); }
+// One transaction per batch; trimming is amortised (every ~200 writes) and frees 10% headroom.
+async function cachePutMany(entries, limit) {
+  if (!entries.length) return;
   try {
     const db = await openDB();
+    const at = Date.now();
     await new Promise((resolve, reject) => {
-      const req = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).put({key, value, at: Date.now()});
-      req.onsuccess = resolve;
-      req.onerror = () => reject(req.error);
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      for (const {key, value} of entries) store.put({key, value, at});
+      tx.oncomplete = resolve; tx.onerror = tx.onabort = () => reject(tx.error);
     });
-    cacheWrites++;
-    if (cacheWrites % 100 === 0) await trimCache(limit);
+    cacheWrites += entries.length;
+    if (cacheWrites >= 200) { cacheWrites = 0; await trimCache(limit); }
   } catch { /* tolerate quota / disabled storage */ }
+}
+async function cacheCount() {
+  try {
+    const db = await openDB();
+    return await new Promise((resolve, reject) => {
+      const r = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).count();
+      r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
+    });
+  } catch { return null; }
 }
 async function trimCache(limit) {
   const db = await openDB();
-  const target = Math.max(200, Math.min(10000, Number(limit) || 2500));
-  const count = await new Promise((resolve, reject) => {
-    const r = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).count();
-    r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
-  });
-  if (count <= target) return;
+  const target = cacheTarget(limit);
+  const count = await cacheCount();
+  if (count === null || count <= target) return;
   await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const req = tx.objectStore(STORE_NAME).index('at').openCursor();
-    let remaining = count - target;
+    let remaining = count - Math.floor(target * 0.9);
     req.onsuccess = () => {
       const cursor = req.result;
       if (cursor && remaining-- > 0) { cursor.delete(); cursor.continue(); }
     };
     tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
   });
+}
+
+/* Cache keys: stable across whitespace/Unicode noise; long text is shared across sites,
+ * short UI strings are scoped per site (their meaning is context-dependent). */
+function normalizeForKey(text) {
+  return text.normalize('NFC').replace(/[^\S\n]+/g, ' ').replace(/ ?\n ?/g, '\n').trim();
+}
+const CJK_RE = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/;
+const VI_RE = /[ăâđêôơưàáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹ]/i;
+// An unchanged "translation" of real foreign text means the model skipped it: show it, but never persist it.
+function looksUntranslated(source, value) {
+  if (normalizeForKey(source) !== normalizeForKey(value)) return false;
+  if (VI_RE.test(source)) return false;
+  return CJK_RE.test(source) || /\p{L}{2,}\s+\p{L}{2,}\s+\p{L}{2,}/u.test(source);
 }
 
 /* ---------- scheduler: global concurrency with AIMD back-off on HTTP 429 ---------- */
@@ -198,7 +228,7 @@ function cancelOwner(owner) {
 }
 function newContext(owner, page, meta = {}) {
   const batchId = typeof meta.batchId === 'string' ? meta.batchId.slice(0, 40) : '';
-  return {owner, gen: generation.get(owner) || 0, page: cleanPage(page), batchId,
+  return {owner, gen: generation.get(owner) || 0, page: cleanPage(page), batchId, site: typeof meta.site === 'string' ? meta.site.slice(0, 100) : '',
     tabId: Number.isInteger(meta.tabId) ? meta.tabId : null, frameId: Number.isInteger(meta.frameId) ? meta.frameId : 0,
     priority: meta.priority === 0 ? 0 : 1};
 }
@@ -547,15 +577,20 @@ async function translateBatch(rows, ctx) {
   if (rows.some(x => typeof x.id !== 'string' || typeof x.text !== 'string' || x.text.length > 12000)) throw new Error('Nội dung cần dịch không hợp lệ.');
   configureConcurrency(Math.max(1, Math.min(8, Number(conf.concurrentRequests) || 3)));
   const prompt = conf.customPrompt?.trim() || VIWEB_PROMPT;
-  const namespace = [CACHE_VERSION, conf.endpoint, conf.model, prompt, 'auto', 'vi'].join('\u001e');
-  const keys = await Promise.all(rows.map(r => hashString(namespace + '\u001e' + r.text +
-    (r.text.length < 100 ? '\u001e' + (r.context || '').slice(0, 450) : ''))));
+  // The endpoint is deliberately not part of the key: 127.0.0.1 vs localhost vs another port serve the same model.
+  const namespace = await hashString([CACHE_VERSION, conf.model, prompt, 'auto', 'vi'].join('\u001e'));
+  const keys = await Promise.all(rows.map(r => {
+    const text = normalizeForKey(r.text);
+    return hashString(namespace + '\u001e' + text + (text.length < 100 ? '\u001e' + (ctx.site || '') : ''));
+  }));
   const cached = await cacheGetMany(keys);
   const done = new Map(); let hits = 0;
   const misses = [];
   for (let i = 0; i < rows.length; i++) {
-    if (cached[i] !== null) { done.set(rows[i].id, cached[i]); hits++; }
-    else misses.push({...rows[i], key: keys[i]});
+    if (cached[i] !== null) {
+      done.set(rows[i].id, cached[i]); hits++;
+      metrics.savedInChars += rows[i].text.length; metrics.savedOutChars += cached[i].length;
+    } else misses.push({...rows[i], key: keys[i]});
   }
   metrics.cacheHits += hits; metrics.cacheMisses += misses.length; touchMetrics();
   if (misses.length) {
@@ -580,13 +615,15 @@ async function translateBatch(rows, ctx) {
       }
       try {
         const computed = await resolveRows(unique, conf, ctx);
+        const fresh = [];
         for (const item of unique) {
           const value = computed.get(item.id);
           if (value === undefined) { resolvers.get(item.key).resolve(null); continue; }
           done.set(item.id, value);
           resolvers.get(item.key).resolve(value);
-          await cachePut(item.key, value, conf.cacheLimit);
+          if (!looksUntranslated(item.text, value)) fresh.push({key: item.key, value});
         }
+        await cachePutMany(fresh, conf.cacheLimit);
       } catch (err) {
         for (const val of resolvers.values()) val.reject(err);
         throw err;
@@ -641,12 +678,15 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   (async () => {
     await metricsReady;
     if (msg.type === 'VIWEB_CANCEL') { cancelOwner(owner); return {cancelled: true}; }
-    if (msg.type === 'VIWEB_METRICS') return {metrics: metricsSummary()};
-    if (msg.type === 'VIWEB_METRICS_RESET') { resetMetrics(); return {metrics: metricsSummary()}; }
+    if (msg.type === 'VIWEB_METRICS') return {metrics: {...metricsSummary(), cacheEntries: await cacheCount()}};
+    if (msg.type === 'VIWEB_METRICS_RESET') { resetMetrics(); return {metrics: {...metricsSummary(), cacheEntries: await cacheCount()}}; }
     if (msg.type === 'VIWEB_MODELS') return await fetchModels();
     if (msg.type === 'VIWEB_TRANSLATE') {
+      // Frame URL is supplied by Chrome (not page JS); it scopes the cache of short, context-dependent strings.
+      let site = '';
+      try { site = new URL(sender.url || sender.tab?.url || '').hostname.toLowerCase(); } catch {}
       return await translateBatch(msg.rows, newContext(owner, msg.page,
-        {batchId: msg.batchId, priority: msg.priority, tabId: sender.tab?.id, frameId: sender.frameId}));
+        {batchId: msg.batchId, priority: msg.priority, tabId: sender.tab?.id, frameId: sender.frameId, site}));
     }
     if (msg.type === 'VIWEB_CLEAR_CACHE') { await clearCache(); return {cleared:true}; }
     const conf = await settings();

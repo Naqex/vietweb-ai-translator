@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "VietWeb AI Translator — CLIProxyAPI",
   "short_name": "VietWeb AI",
-  "version": "1.4.2",
-  "version_name": "1.4.2-hedging",
+  "version": "1.4.3",
+  "version_name": "1.4.3-cache-reuse",
   "description": "Dịch trang web sang tiếng Việt qua CLIProxyAPI: hiển thị theo luồng (streaming), ưu tiên vùng nhìn thấy, giao diện kiểu Apple.",
   "icons": {
     "16": "icons/16.png",
