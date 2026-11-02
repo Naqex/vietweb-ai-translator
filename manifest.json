@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "VietWeb AI Translator — CLIProxyAPI",
   "short_name": "VietWeb AI",
-  "version": "1.6.2",
-  "version_name": "1.6.2-bg-images",
+  "version": "1.7.0",
+  "version_name": "1.7.0-image-quality",
   "description": "Dịch trang web, phụ đề YouTube và chữ trong ảnh sang tiếng Việt qua CLIProxyAPI: streaming, cache dùng lại, giao diện kiểu Apple.",
   "icons": {
     "16": "icons/16.png",

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.0 — Cleaner, sharper image translation
+
+- **Seamless erase.** The original text is removed by interpolating the colours around the box (left/right and top/bottom edges), so gradients, buttons and cards no longer get a flat rectangle. Busy or photographic backgrounds still fall back to a solid fill.
+- **Original text colour.** The translation is drawn in the colour of the original ink (when it contrasts enough with the background, otherwise black/white). Alignment (left/centre/right) comes from the ink position, with the model's hint as fallback.
+- **Tight boxes.** If original glyphs touch the edge of the erased area, the box grows (up to two times) so no residue is left.
+- **Tall / wide pictures (webtoons, long screenshots)** are cut into up to 10 overlapping tiles, translated 3 at a time and merged back with region ownership by centre, so text no longer becomes illegible after downscaling. Each tile is cached separately by content.
+- Prompt asks for tight boxes and an alignment field `a`; `IMAGE_CACHE_REV` 2 invalidates older cached image results.
+- Test: new `tests/image_quality_smoke.py` (gradient erase, ink colour, alignment, tiling).
+
 ## 1.6.2 — Pictures drawn as CSS backgrounds (X / Twitter)
 
 - Sites such as X show the photo as a `background-image` on a div and keep a transparent `<img>` on top, so swapping only the `<img>` changed nothing visible. The translated picture is now also applied to any background-image in the nearby DOM that points at the same file (or fills the same box as the `<img>`), and restored when you switch back to the original.

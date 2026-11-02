@@ -130,17 +130,47 @@
     }, 90);
   }
 
-  /* ---------- image → base64 JPEG ---------- */
+  /* ---------- image → base64 JPEG tiles (very tall / wide pictures are cut so the text stays legible) ---------- */
+  const MAX_TILES = 10;
+  function tilePlan(w, h) {
+    const max = Math.max(512, Number(conf.imageMaxSide) || 1536);
+    const vertical = h >= w, long = vertical ? h : w, short = vertical ? w : h;
+    let n = 1;
+    if (long > max * 1.3 && long / short > 2.4) n = Math.min(MAX_TILES, Math.ceil(long / (short * 2)));
+    const own = long / n, overlap = n > 1 ? Math.max(24, Math.round(own * 0.06)) : 0;
+    return Array.from({length: n}, (_, i) => {
+      const own0 = i * own, own1 = (i + 1) * own, start = Math.max(0, Math.floor(own0 - overlap)), end = Math.min(long, Math.ceil(own1 + overlap));
+      return {vertical, start, len: end - start, own0, own1: i === n - 1 ? Infinity : own1};
+    });
+  }
   function encode(source, w, h) {
-    const max = Math.max(512, Number(conf.imageMaxSide) || 1536), scale = Math.min(1, max / Math.max(w, h));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(w * scale));
-    canvas.height = Math.max(1, Math.round(h * scale));
-    const ctx = canvas.getContext('2d', {willReadFrequently: true});
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-    return {data: canvas.toDataURL('image/jpeg', 0.85)};
+    const max = Math.max(512, Number(conf.imageMaxSide) || 1536);
+    return tilePlan(w, h).map(tile => {
+      const sw = tile.vertical ? w : tile.len, sh = tile.vertical ? tile.len : h;
+      const scale = Math.min(1, max / Math.max(sw, sh));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(sw * scale));
+      canvas.height = Math.max(1, Math.round(sh * scale));
+      const ctx = canvas.getContext('2d', {willReadFrequently: true});
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(source, tile.vertical ? 0 : tile.start, tile.vertical ? tile.start : 0, sw, sh, 0, 0, canvas.width, canvas.height);
+      return {...tile, data: canvas.toDataURL('image/jpeg', 0.85)};
+    });
+  }
+  /* A region belongs to the tile whose own zone holds its centre; local 0-1000 boxes become whole-image boxes. */
+  function mergeTiles(tiles, results, w, h) {
+    const merged = [];
+    tiles.forEach((tile, i) => {
+      for (const region of results[i] || []) {
+        const [y0, x0, y1, x1] = region.b, a = tile.vertical ? [y0, y1] : [x0, x1];
+        const px = a.map(v => tile.start + v / 1000 * tile.len), mid = (px[0] + px[1]) / 2;
+        if (tiles.length > 1 && (mid < tile.own0 || mid >= tile.own1)) continue;
+        const g = v => Math.max(0, Math.min(1000, Math.round(v / (tile.vertical ? h : w) * 10000) / 10));
+        merged.push({...region, b: tile.vertical ? [g(px[0]), x0, g(px[1]), x1] : [y0, g(px[0]), y1, g(px[1])]});
+      }
+    });
+    return merged;
   }
   function dataUrlToBlob(url) {
     const [head, body] = url.split(',');
@@ -161,7 +191,7 @@
   }
   async function imageData(img) {
     const nw = img.naturalWidth, nh = img.naturalHeight;
-    try { return {...encode(img, nw, nh), source: img, w: nw, h: nh}; }
+    try { return {tiles: encode(img, nw, nh), source: img, w: nw, h: nh}; }
     catch { /* cross-origin image taints the canvas: fetch the bytes instead */ }
     const src = imgSrc(img);
     let blob;
@@ -175,29 +205,97 @@
       blob = dataUrlToBlob(res.data);
     }
     const {source, w, h} = await decodeBlob(blob);
-    return {...encode(source, w, h), source, w, h};
+    return {tiles: encode(source, w, h), source, w, h};
   }
 
-  /* ---------- colours sampled around each box so the translation blends in ---------- */
-  function sampleColors(canvas, [y0, x0, y1, x1]) {
-    const W = canvas.width, H = canvas.height, ctx = canvas.getContext('2d', {willReadFrequently: true});
-    const pad = Math.max(2, Math.round(Math.min(W, H) * 0.012));
-    const ix0 = Math.round(x0 / 1000 * W), ix1 = Math.round(x1 / 1000 * W), iy0 = Math.round(y0 / 1000 * H), iy1 = Math.round(y1 / 1000 * H);
-    const ox0 = Math.max(0, ix0 - pad), oy0 = Math.max(0, iy0 - pad), ox1 = Math.min(W, ix1 + pad), oy1 = Math.min(H, iy1 + pad);
-    if (ox1 <= ox0 || oy1 <= oy0) return {bg: '#fff', fg: '#111'};
-    const {data} = ctx.getImageData(ox0, oy0, ox1 - ox0, oy1 - oy0), w = ox1 - ox0;
-    const rs = [], gs = [], bs = [];
-    const step = Math.max(1, Math.floor(((ox1 - ox0) * (oy1 - oy0)) / 600));
-    for (let y = oy0, n = 0; y < oy1; y++) for (let x = ox0; x < ox1; x++, n++) {
-      if (n % step) continue;
-      if (x >= ix0 && x < ix1 && y >= iy0 && y < iy1) continue;
-      const o = ((y - oy0) * w + (x - ox0)) * 4;
-      rs.push(data[o]); gs.push(data[o + 1]); bs.push(data[o + 2]);
+  /* ---------- erase the original text: fill from the surrounding edges, keep the original ink colour ---------- */
+  const relLum = (r, g, b) => { const f = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+  const contrastOf = (a, b) => { const p = relLum(...a), q = relLum(...b); return (Math.max(p, q) + 0.05) / (Math.min(p, q) + 0.05); };
+  const smoothStrip = (arr, k = 2) => arr.map((_, i) => {
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let j = Math.max(0, i - k); j <= Math.min(arr.length - 1, i + k); j++) if (arr[j]) { r += arr[j][0]; g += arr[j][1]; b += arr[j][2]; n++; }
+    return n ? [r / n, g / n, b / n] : null;
+  });
+  const roughness = arr => {
+    let sum = 0, n = 0;
+    for (let i = 1; i < arr.length; i++) if (arr[i] && arr[i - 1]) { sum += (Math.abs(arr[i][0] - arr[i - 1][0]) + Math.abs(arr[i][1] - arr[i - 1][1]) + Math.abs(arr[i][2] - arr[i - 1][2])) / 3; n++; }
+    return n ? sum / n : 0;
+  };
+  const rgb = c => `rgb(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])})`;
+  const darkOrLight = c => (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) > 140 ? '#111' : '#fff';
+
+  /* Returns a plan: the pixel box, how to fill it (gradient-aware ImageData or a solid colour), the text colour and alignment. */
+  function prepareRegion(ctx, W, H, region, subtle) {
+    const pad = Math.max(2, Math.round(Math.min(W, H) * 0.004)), b = region.b;
+    let x0 = Math.max(0, Math.floor(b[1] / 1000 * W) - pad), y0 = Math.max(0, Math.floor(b[0] / 1000 * H) - pad);
+    let x1 = Math.min(W, Math.ceil(b[3] / 1000 * W) + pad), y1 = Math.min(H, Math.ceil(b[2] / 1000 * H) + pad);
+    if (x1 - x0 < 4 || y1 - y0 < 4) return null;
+    if (subtle) return {x0, y0, x1, y1, solid: 'rgba(0,0,0,.74)', fg: '#fff', align: region.a || 'c'};
+    const R = 3;
+    let plan = null;
+    for (let pass = 0; pass < 3; pass++) {
+      const w = x1 - x0, h = y1 - y0;
+      const ex0 = Math.max(0, x0 - R), ey0 = Math.max(0, y0 - R), ex1 = Math.min(W, x1 + R), ey1 = Math.min(H, y1 + R), ew = ex1 - ex0;
+      const ed = ctx.getImageData(ex0, ey0, ew, ey1 - ey0).data;
+      const at = (x, y) => ((y - ey0) * ew + (x - ex0)) * 4;
+      const avg = (xa, xb, ya, yb) => {
+        xa = Math.max(xa, 0); xb = Math.min(xb, W); ya = Math.max(ya, 0); yb = Math.min(yb, H);
+        let r = 0, g = 0, bl = 0, n = 0;
+        for (let y = ya; y < yb; y++) for (let x = xa; x < xb; x++) { const o = at(x, y); r += ed[o]; g += ed[o + 1]; bl += ed[o + 2]; n++; }
+        return n ? [r / n, g / n, bl / n] : null;
+      };
+      const rawL = Array.from({length: h}, (_, i) => avg(x0 - R, x0, y0 + i, y0 + i + 1));
+      const rawR = Array.from({length: h}, (_, i) => avg(x1, x1 + R, y0 + i, y0 + i + 1));
+      const rawT = Array.from({length: w}, (_, i) => avg(x0 + i, x0 + i + 1, y0 - R, y0));
+      const rawB = Array.from({length: w}, (_, i) => avg(x0 + i, x0 + i + 1, y1, y1 + R));
+      const strips = [rawL, rawR, rawT, rawB], known = strips.flat().filter(Boolean);
+      if (!known.length) return {x0, y0, x1, y1, solid: '#fff', fg: '#111', align: region.a || 'c'};
+      const median = i => known.map(c => c[i]).sort((p, q) => p - q)[known.length >> 1];
+      const mid = [median(0), median(1), median(2)];
+      const smooth = Math.max(...strips.map(roughness)) <= 9;
+      if (!smooth) return {x0, y0, x1, y1, solid: rgb(mid), fg: darkOrLight(mid), align: region.a || 'c'};
+      const [L, Rr, T, B] = strips.map(s => smoothStrip(s));
+      const fill = new ImageData(w, h), dist = new Uint16Array(w * h), sum = [0, 0, 0];
+      let maxD = 0;
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const tx = (x + 0.5) / w, ty = (y + 0.5) / h, est = [];
+        if (L[y] && Rr[y]) est.push([0, 1, 2].map(k => L[y][k] * (1 - tx) + Rr[y][k] * tx)); else if (L[y] || Rr[y]) est.push(L[y] || Rr[y]);
+        if (T[x] && B[x]) est.push([0, 1, 2].map(k => T[x][k] * (1 - ty) + B[x][k] * ty)); else if (T[x] || B[x]) est.push(T[x] || B[x]);
+        const c = est.length === 2 ? [0, 1, 2].map(k => (est[0][k] + est[1][k]) / 2) : est[0] || mid;
+        const o = (y * w + x) * 4, so = at(x0 + x, y0 + y);
+        fill.data[o] = c[0]; fill.data[o + 1] = c[1]; fill.data[o + 2] = c[2]; fill.data[o + 3] = 255;
+        const d = Math.abs(ed[so] - c[0]) + Math.abs(ed[so + 1] - c[1]) + Math.abs(ed[so + 2] - c[2]);
+        dist[y * w + x] = d; if (d > maxD) maxD = d;
+        sum[0] += c[0]; sum[1] += c[1]; sum[2] += c[2];
+      }
+      const bg = sum.map(v => v / (w * h)), INK = 90, touch = {l: 0, r: 0, t: 0, b: 0}, band = 2;
+      let ink = 0, ix0 = w, ix1 = -1, cr = 0, cg = 0, cb = 0, cn = 0;
+      const strong = Math.max(INK, maxD * 0.75);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const d = dist[y * w + x];
+        if (d <= INK) continue;
+        ink++;
+        if (x < ix0) ix0 = x; if (x > ix1) ix1 = x;
+        if (x < band) touch.l++; if (x >= w - band) touch.r++; if (y < band) touch.t++; if (y >= h - band) touch.b++;
+        if (d >= strong) { const so = at(x0 + x, y0 + y); cr += ed[so]; cg += ed[so + 1]; cb += ed[so + 2]; cn++; }
+      }
+      const grow = Math.max(3, Math.round(Math.min(w, h) * 0.08));
+      if (pass < 2 && (touch.l >= 3 || touch.r >= 3 || touch.t >= 3 || touch.b >= 3)) {
+        const nx0 = touch.l >= 3 ? Math.max(0, x0 - grow) : x0, nx1 = touch.r >= 3 ? Math.min(W, x1 + grow) : x1;
+        const ny0 = touch.t >= 3 ? Math.max(0, y0 - grow) : y0, ny1 = touch.b >= 3 ? Math.min(H, y1 + grow) : y1;
+        if (nx0 !== x0 || nx1 !== x1 || ny0 !== y0 || ny1 !== y1) { x0 = nx0; x1 = nx1; y0 = ny0; y1 = ny1; continue; }
+      }
+      const inkOk = cn >= 6 && ink / (w * h) < 0.5;
+      const inkColor = inkOk ? [cr / cn, cg / cn, cb / cn] : null;
+      let align = region.a || 'c';
+      if (inkOk) {
+        const gapL = ix0, gapR = w - 1 - ix1;
+        if (Math.abs(gapR - gapL) >= 0.12 * w) align = gapR > gapL ? 'l' : 'r';
+      }
+      plan = {x0, y0, x1, y1, fill, align, fg: inkColor && contrastOf(inkColor, bg) >= 3 ? rgb(inkColor) : darkOrLight(bg)};
+      break;
     }
-    if (!rs.length) return {bg: '#fff', fg: '#111'};
-    const med = a => a.sort((p, q) => p - q)[a.length >> 1];
-    const r = med(rs), g = med(gs), b = med(bs);
-    return {bg: `rgb(${r},${g},${b})`, fg: (0.299 * r + 0.587 * g + 0.114 * b) > 140 ? '#111' : '#fff'};
+    return plan || {x0, y0, x1, y1, solid: '#fff', fg: '#111', align: region.a || 'c'};
   }
 
   /* ---------- paint the translation into a full-resolution copy ---------- */
@@ -227,27 +325,29 @@
   }
   function paintRegions(ctx, canvas, regions) {
     const W = canvas.width, H = canvas.height, subtle = conf.imageStyle === 'subtle';
-    const colors = regions.map(r => subtle ? {bg: 'rgba(0,0,0,.74)', fg: '#fff'} : sampleColors(canvas, r.b)); // sample before painting over
-    const pad = Math.max(2, Math.round(Math.min(W, H) * 0.004));
-    regions.forEach((region, i) => {
-      const [y0, x0, y1, x1] = region.b;
-      const left = Math.max(0, x0 / 1000 * W - pad), top = Math.max(0, y0 / 1000 * H - pad);
-      const w = Math.min(W, x1 / 1000 * W + pad) - left, h = Math.min(H, y1 / 1000 * H + pad) - top;
-      if (w < 4 || h < 4) return;
+    const plans = regions.map(r => ({region: r, plan: prepareRegion(ctx, W, H, r, subtle)})).filter(p => p.plan); // all sampling happens before anything is painted
+    for (const {plan} of plans) { // erase first so overlapping boxes never cover each other's text
+      if (plan.fill) { ctx.putImageData(plan.fill, plan.x0, plan.y0); continue; }
+      ctx.beginPath();
+      ctx.roundRect(plan.x0, plan.y0, plan.x1 - plan.x0, plan.y1 - plan.y0, Math.min(6, (plan.y1 - plan.y0) * 0.15));
+      ctx.fillStyle = plan.solid;
+      ctx.fill();
+    }
+    for (const {region, plan} of plans) {
+      const w = plan.x1 - plan.x0, h = plan.y1 - plan.y0, inner = Math.max(1, w * 0.02);
       ctx.save();
       ctx.beginPath();
-      ctx.roundRect(left, top, w, h, Math.min(6, h * 0.15));
-      ctx.fillStyle = colors[i].bg;
-      ctx.fill();
+      ctx.rect(plan.x0, plan.y0, w, h);
       ctx.clip();
-      const inner = Math.max(1, w * 0.02), {size, lines} = layoutText(ctx, region.v, w - inner * 2, h);
-      ctx.fillStyle = colors[i].fg;
-      ctx.textAlign = 'center';
+      const {size, lines} = layoutText(ctx, region.v, w - inner * 2, h);
+      ctx.fillStyle = plan.fg;
       ctx.textBaseline = 'middle';
-      const lh = size * 1.18, y = top + h / 2 - ((lines.length - 1) * lh) / 2;
-      lines.forEach((text, n) => ctx.fillText(text, left + w / 2, y + n * lh, w));
+      ctx.textAlign = plan.align === 'l' ? 'left' : plan.align === 'r' ? 'right' : 'center';
+      const tx = plan.align === 'l' ? plan.x0 + inner : plan.align === 'r' ? plan.x1 - inner : plan.x0 + w / 2;
+      const lh = size * 1.18, y = plan.y0 + h / 2 - ((lines.length - 1) * lh) / 2;
+      lines.forEach((text, n) => ctx.fillText(text, tx, y + n * lh, w));
       ctx.restore();
-    });
+    }
   }
   async function bake(source, w, h, regions, cssW) {
     const s = Math.min(1, 4096 / Math.max(w, h), Math.sqrt(16e6 / (w * h)));
@@ -394,11 +494,21 @@
     refreshPill(img);
     const src = imgSrc(img), cssW = img.naturalWidth;
     try {
-      const {data, source, w, h} = await imageData(img);
-      const res = await M.send({type: 'VIWEB_IMAGE', data, page: {title: document.title.slice(0, 120)}});
-      if (!res?.ok) throw new Error(res?.error || 'Dịch ảnh thất bại.');
+      const {tiles, source, w, h} = await imageData(img);
+      const page = {title: document.title.slice(0, 120)}, results = new Array(tiles.length).fill(null);
+      let next = 0, failure = null;
+      await Promise.all(Array.from({length: Math.min(3, tiles.length)}, async () => {
+        while (next < tiles.length) {
+          const i = next++;
+          const res = await M.send({type: 'VIWEB_IMAGE', data: tiles[i].data, page});
+          if (res?.ok) results[i] = res.regions || [];
+          else failure = failure || new Error(res?.error || 'Dịch ảnh thất bại.');
+        }
+      }));
+      if (results.every(r => r === null)) throw failure;
       if (states.get(img) !== st || imgSrc(img) !== src) return;
-      st.regions = res.regions || [];
+      st.regions = mergeTiles(tiles, results, w, h);
+      if (failure && !auto) toast('Một số phần của ảnh chưa dịch được.');
       if (!st.regions.length) { st.status = 'empty'; refreshPill(img); return; }
       const {blob, density} = await bake(source, w, h, st.regions, cssW);
       if (states.get(img) !== st || imgSrc(img) !== src) return;

@@ -54,10 +54,11 @@ Example: [{"n":1,"t":"这个模型的速度怎么样？","c":""},{"n":2,"t":"Jus
 /* Image prompt (v1.6): one call returns OCR + position + translation. box_2d is [ymin,xmin,ymax,xmax] on a 0-1000 grid. */
 const VIWEB_IMAGE_PROMPT = `You are an OCR and translation engine for images found on web pages (manga, comics, screenshots, banners, infographics, product photos).
 Find every block of readable text that is NOT already Vietnamese and translate it into natural Vietnamese.
-Output ONLY a JSON array, no markdown. Each element: {"box_2d":[ymin,xmin,ymax,xmax],"src":"original text","vi":"Vietnamese translation"}.
+Output ONLY a JSON array, no markdown. Each element: {"box_2d":[ymin,xmin,ymax,xmax],"src":"original text","vi":"Vietnamese translation","a":"l|c|r"}.
 Rules:
-- box_2d holds integers 0-1000 relative to the whole image (origin top-left) and must be tight around the text block.
-- One element per logical block: a speech bubble, caption, sign, button, label, title or paragraph. Join the lines of a block with spaces.
+- box_2d holds integers 0-1000 relative to the whole image (origin top-left) and must be tight around ALL the glyphs of the block, including accents, punctuation and the first and last characters.
+- a is the text alignment inside the block: l (left), c (centre) or r (right).
+- One element per logical block: a speech bubble, caption, sign, button, label, title or paragraph. Join the lines of a block with spaces. Never merge text from separate bubbles or columns.
 - Keep numbers, prices, currency, units, codes, URLs, usernames and brand names exactly as written; never convert or reformat them.
 - Comics and manga: natural spoken Vietnamese that keeps the speaker's tone; sound effects may be skipped.
 - Keep each translation about as short as the source, because it is drawn back into the same box.

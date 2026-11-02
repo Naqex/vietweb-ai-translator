@@ -665,7 +665,7 @@ async function fetchModels() {
 }
 
 /* ---------- image translation: OCR + boxes + Vietnamese in one multimodal call, cached by image hash ---------- */
-const IMAGE_CACHE_REV = 1;
+const IMAGE_CACHE_REV = 2;
 const IMAGE_DATA_RE = /^data:image\/(?:jpeg|png|webp|gif);base64,/;
 function parseRegions(raw) {
   const str = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
@@ -688,7 +688,10 @@ function parseRegions(raw) {
     const [y0, x0, y1, x1] = box.map(n => Math.max(0, Math.min(1000, Math.round(Number(n)))));
     if (![y0, x0, y1, x1].every(Number.isFinite) || y1 - y0 < 4 || x1 - x0 < 4) continue;
     if (src && normalizeForKey(src) === normalizeForKey(vi)) continue; // unchanged: nothing to draw
-    regions.push({b: [y0, x0, y1, x1], s: src.slice(0, 600), v: vi.slice(0, 1200)});
+    const align = String(item?.a || item?.align || '').trim().toLowerCase()[0];
+    const region = {b: [y0, x0, y1, x1], s: src.slice(0, 600), v: vi.slice(0, 1200)};
+    if (align === 'l' || align === 'c' || align === 'r') region.a = align;
+    regions.push(region);
     if (regions.length >= 80) break;
   }
   return regions;
