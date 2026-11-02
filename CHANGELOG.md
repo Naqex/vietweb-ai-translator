@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.2 — Pictures drawn as CSS backgrounds (X / Twitter)
+
+- Sites such as X show the photo as a `background-image` on a div and keep a transparent `<img>` on top, so swapping only the `<img>` changed nothing visible. The translated picture is now also applied to any background-image in the nearby DOM that points at the same file (or fills the same box as the `<img>`), and restored when you switch back to the original.
+- A small MutationObserver puts the translated background back if the page's framework rewrites the inline style after a re-render.
+- Test: `tests/image_smoke.py` covers the background + transparent-img pattern, a page overwriting the style, and restore.
+
 ## 1.6.1 — Translated images replace the original picture
 
 - **No more DOM overlay.** The translation is now painted into a full-resolution copy of the image (up to 4096 px / 16 MP; PNG ≤ 3 MP, otherwise JPEG 0.92) and that copy replaces the `<img>` source (blob URL). Zoom, lightboxes, "Save image as", drag-and-drop and scrolling now just work, and the text stays sharp at any size — it no longer depends on the small on-page overlay.

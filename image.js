@@ -62,6 +62,7 @@
   const sameImage = (st, img) => st.urls.has(imgSrc(img)) || st.urls.has(img.src);
   function dropState(img) {
     const st = states.get(img);
+    st?.guard?.disconnect();
     if (st?.blobUrl) URL.revokeObjectURL(st.blobUrl);
     translated.delete(img);
     states.delete(img);
@@ -264,11 +265,35 @@
 
   /* ---------- swap the picture the page shows ---------- */
   const setAttr = (el, name, value) => { if (value == null) el.removeAttribute(name); else el.setAttribute(name, value); };
+  /* Sites like X draw the picture as a CSS background-image on a div and keep a transparent <img> on top:
+     find those backgrounds (same file, or same box as the <img>) so they are swapped as well. */
+  const pathKey = u => { try { const x = new URL(u, location.href); return x.origin + x.pathname; } catch { return u; } };
+  const bgUrls = value => [...value.matchAll(/url\((["']?)(.*?)\1\)/g)].map(m => m[2]);
+  function collectBackgrounds(img, st, current) {
+    const keys = new Set([...st.urls, current].filter(Boolean).map(pathKey));
+    const r = img.getBoundingClientRect(), roots = [];
+    for (let el = img.parentElement, i = 0; el && i < 3 && el !== document.body && el !== document.documentElement; el = el.parentElement, i++) roots.push(el);
+    const seen = new Set(), found = [];
+    const check = el => {
+      if (seen.has(el) || el === img || el.closest('[data-vietweb-ui]')) return;
+      seen.add(el);
+      const bg = getComputedStyle(el).backgroundImage;
+      if (!bg || bg === 'none') return;
+      const urls = bgUrls(bg).filter(u => !/^data:image\/svg/i.test(u));
+      if (!urls.length) return;
+      const b = el.getBoundingClientRect();
+      const sameBox = Math.abs(b.left - r.left) < 6 && Math.abs(b.top - r.top) < 6 && Math.abs(b.width - r.width) < 6 && Math.abs(b.height - r.height) < 6;
+      if (urls.some(u => keys.has(pathKey(u))) || sameBox) found.push([el, el.style.getPropertyValue('background-image'), el.style.getPropertyPriority('background-image')]);
+    };
+    for (const root of roots) { check(root); let n = 0; for (const el of root.querySelectorAll('*')) { if (++n > 300) break; check(el); } }
+    return found;
+  }
   function captureOriginal(img, st) {
-    const o = {src: img.getAttribute('src'), srcset: img.getAttribute('srcset'), sizes: img.getAttribute('sizes'), sources: [], link: null};
+    const o = {src: img.getAttribute('src'), srcset: img.getAttribute('srcset'), sizes: img.getAttribute('sizes'), sources: [], link: null, bgs: []};
     if (img.parentElement?.tagName === 'PICTURE') for (const s of img.parentElement.querySelectorAll('source')) o.sources.push([s, s.getAttribute('srcset')]);
     const a = img.closest('a'), current = imgSrc(img);
     if (a && a.getAttribute('href') && (a.href === current || a.href === img.src)) o.link = [a, a.getAttribute('href')];
+    o.bgs = collectBackgrounds(img, st, current);
     st.orig = o;
   }
   function showUrl(img, st, url) {
@@ -277,6 +302,7 @@
     if (st.density > 1.02) img.setAttribute('srcset', `${url} ${st.density.toFixed(3)}x`); else img.removeAttribute('srcset');
     img.src = url;
     if (st.orig.link) st.orig.link[0].setAttribute('href', url);
+    for (const [el] of st.orig.bgs) el.style.setProperty('background-image', `url("${url}")`, 'important');
   }
   function showOriginal(img, st) {
     const o = st.orig;
@@ -285,6 +311,7 @@
     setAttr(img, 'srcset', o.srcset);
     setAttr(img, 'src', o.src);
     if (o.link) setAttr(o.link[0], 'href', o.link[1]);
+    for (const [el, value, priority] of o.bgs) { if (value) el.style.setProperty('background-image', value, priority); else el.style.removeProperty('background-image'); }
   }
   function waitLoad(img, ms = 8000) {
     return new Promise(resolve => {
@@ -329,6 +356,18 @@
     }
     st.applied = true;
     translated.add(img);
+    guardBackgrounds(img, st);
+  }
+  // React-style pages may rewrite the inline style or src after a re-render: put the translated picture back.
+  function guardBackgrounds(img, st) {
+    st.guard?.disconnect();
+    const targets = [img, ...st.orig.bgs.map(b => b[0])];
+    st.guard = new MutationObserver(() => {
+      if (states.get(img) !== st || !st.applied || st.restoring) return;
+      const broken = st.orig.bgs.some(([el]) => !el.style.backgroundImage.includes(st.shownUrl));
+      if (broken) { st.restoring = true; for (const [el] of st.orig.bgs) el.style.setProperty('background-image', `url("${st.shownUrl}")`, 'important'); st.restoring = false; }
+    });
+    for (const el of targets) if (el !== img) st.guard.observe(el, {attributes: true, attributeFilter: ['style']});
   }
   function pruneDetached() {
     for (const img of [...translated]) if (!img.isConnected) dropState(img);

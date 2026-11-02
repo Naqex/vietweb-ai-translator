@@ -25,6 +25,7 @@ DATA_URL = data_url((400, 300), (255, 255, 255))
 URL_C = data_url((401, 300), (250, 250, 250))
 URL_D = data_url((402, 300), (240, 240, 240))
 URL_P = data_url((403, 300), (255, 255, 255))
+URL_X = data_url((404, 300), (255, 255, 255))
 BIG = data_url((1600, 1200), (255, 255, 255))
 TAINT_URL = 'https://img.test/remote.png'
 PAGE = f"""<html><head><title>Shop</title></head><body style="margin:0;padding-bottom:1500px">
@@ -32,6 +33,7 @@ PAGE = f"""<html><head><title>Shop</title></head><body style="margin:0;padding-b
 <img id="tiny" src="{DATA_URL}" style="display:block;margin:20px 0 0 100px;width:60px;height:40px">
 <img id="remote" src="{TAINT_URL}" style="display:block;margin:20px 0 0 100px;width:400px;height:300px">
 <picture><source id="src" srcset="{URL_P}"><img id="pic" src="{DATA_URL}" style="display:block;margin:20px 0 0 100px;width:400px;height:300px"></picture>
+<div id="xwrap" style="position:relative;margin:20px 0 0 100px;width:400px;height:300px"><div id="xbg" style="position:absolute;inset:0;background-size:contain;background-image:url({URL_X})"></div><img id="xi" src="{URL_X}" style="position:absolute;inset:0;width:100%;height:100%;opacity:0"></div>
 <img id="big" src="{BIG}" style="display:block;margin:20px 0 0 100px;width:400px;height:300px">
 <img id="c" src="{URL_C}" style="display:block;margin:20px 0 0 100px;width:400px;height:300px">
 <img id="d" src="{URL_D}" style="display:block;margin:20px 0 0 100px;width:400px;height:300px">
@@ -153,6 +155,14 @@ with sync_playwright() as p:
     page.evaluate("window.__msg.forEach(f => f({type:'VIWEB_IMAGE_CONTEXT', srcUrl: document.getElementById('pic').currentSrc}))")
     page.wait_for_function("document.querySelector('#pic').currentSrc.startsWith('data:')", timeout=3000)
     assert attr(page, '#src', 'srcset') is not None, '<source srcset> restored'
+
+    # X-style viewer: the picture is a CSS background on a div, a transparent <img> sits on top
+    page.evaluate("window.__msg.forEach(f => f({type:'VIWEB_IMAGE_CONTEXT', srcUrl: document.getElementById('xi').src}))")
+    page.wait_for_function("getComputedStyle(document.querySelector('#xbg')).backgroundImage.includes('blob:')", timeout=6000)
+    page.evaluate("document.querySelector('#xbg').style.cssText = 'position:absolute;inset:0;background-size:contain;background-image:url(about:blank)'")
+    page.wait_for_function("getComputedStyle(document.querySelector('#xbg')).backgroundImage.includes('blob:')", timeout=3000)
+    page.evaluate("window.__msg.forEach(f => f({type:'VIWEB_IMAGE_CONTEXT', srcUrl: document.getElementById('xi').src}))")
+    page.wait_for_function("getComputedStyle(document.querySelector('#xbg')).backgroundImage.includes('data:')", timeout=3000)
 
     # large image: baked at the picture's own resolution (not the downscaled copy sent to the model)
     page.evaluate("window.__msg.forEach(f => f({type:'VIWEB_IMAGE_CONTEXT', srcUrl: document.getElementById('big').src}))")
