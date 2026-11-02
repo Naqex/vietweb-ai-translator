@@ -665,7 +665,7 @@ async function fetchModels() {
 }
 
 /* ---------- image translation: OCR + boxes + Vietnamese in one multimodal call, cached by image hash ---------- */
-const IMAGE_CACHE_REV = 2;
+const IMAGE_CACHE_REV = 3;
 const IMAGE_DATA_RE = /^data:image\/(?:jpeg|png|webp|gif);base64,/;
 function parseRegions(raw) {
   const str = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();

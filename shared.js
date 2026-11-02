@@ -56,11 +56,12 @@ const VIWEB_IMAGE_PROMPT = `You are an OCR and translation engine for images fou
 Find every block of readable text that is NOT already Vietnamese and translate it into natural Vietnamese.
 Output ONLY a JSON array, no markdown. Each element: {"box_2d":[ymin,xmin,ymax,xmax],"src":"original text","vi":"Vietnamese translation","a":"l|c|r"}.
 Rules:
-- box_2d holds integers 0-1000 relative to the whole image (origin top-left) and must be tight around ALL the glyphs of the block, including accents, punctuation and the first and last characters.
+- box_2d holds integers 0-1000 relative to the whole image (origin top-left) and must be tight around ALL the glyphs of the block, including accents, punctuation and the first and last characters. Do NOT include the button, bubble, card or background around the text.
 - a is the text alignment inside the block: l (left), c (centre) or r (right).
-- One element per logical block: a speech bubble, caption, sign, button, label, title or paragraph. Join the lines of a block with spaces. Never merge text from separate bubbles or columns.
+- One element per logical block: a speech bubble, caption, sign, button, label, title or paragraph. Join the lines of a block with spaces. Never merge text from separate bubbles, buttons, table cells or columns, and never return the same text twice.
+- First decide what the image is, then translate accordingly. Software UI / website screenshots: use standard Vietnamese product terminology (e.g. seat -> "suất", member -> "thành viên", workspace -> "không gian làm việc", invite -> "mời"), keep labels short and consistent. Comics and manga: natural spoken Vietnamese that keeps the speaker's tone. Charts and infographics: keep axis values, units and legends exact.
 - Keep numbers, prices, currency, units, codes, URLs, usernames and brand names exactly as written; never convert or reformat them.
-- Comics and manga: natural spoken Vietnamese that keeps the speaker's tone; sound effects may be skipped.
+- Read the text carefully character by character (including small and low-contrast text); do not guess illegible words, skip them instead.
 - Keep each translation about as short as the source, because it is drawn back into the same box.
 - Skip text that is already Vietnamese, watermarks, illegible text and purely decorative logos.
 - If nothing needs translating, return [].

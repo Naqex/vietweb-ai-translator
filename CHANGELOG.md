@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.1 — Better text detection and cleaner erase
+
+- Image prompt: boxes hug the glyphs only (not the button or bubble), never merge separate buttons, never repeat a text, and the model first decides the image type (UI / manga / chart) so terminology fits (seat → "suất", member → "thành viên", workspace → "không gian làm việc").
+- Erase rewritten: only the thin text strokes are removed and filled from their surroundings, so buttons, borders, outlines and gradients stay intact (no more white smudge around a sloppy box). Long lines that merely cross the box, and anything touching its edge, are left alone.
+- Text polarity (dark-on-light vs light-on-dark) is read from the middle of the box, so it also works when the box spills over onto a dark page.
+- Translation is sized from the original ink height, weight and colour; alignment comes from the original lines.
+- Near-duplicate boxes (e.g. from overlapping tiles) are dropped. Image cache revision 3 (old baked results are re-translated once).
+
 ## 1.7.0 — Cleaner, sharper image translation
 
 - **Seamless erase.** The original text is removed by interpolating the colours around the box (left/right and top/bottom edges), so gradients, buttons and cards no longer get a flat rectangle. Busy or photographic backgrounds still fall back to a solid fill.

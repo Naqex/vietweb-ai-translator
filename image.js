@@ -170,7 +170,20 @@
         merged.push({...region, b: tile.vertical ? [g(px[0]), x0, g(px[1]), x1] : [y0, g(px[0]), y1, g(px[1])]});
       }
     });
-    return merged;
+    return dedupe(merged);
+  }
+  /* The model sometimes returns the same block twice (or once per overlapping tile): keep the one with more source text. */
+  function dedupe(list) {
+    const area = r => Math.max(1, (r.b[2] - r.b[0]) * (r.b[3] - r.b[1]));
+    const overlap = (p, q) => Math.max(0, Math.min(p.b[2], q.b[2]) - Math.max(p.b[0], q.b[0])) * Math.max(0, Math.min(p.b[3], q.b[3]) - Math.max(p.b[1], q.b[1]));
+    const drop = new Set();
+    list.forEach((p, i) => list.forEach((q, j) => {
+      if (j <= i || drop.has(i) || drop.has(j)) return;
+      const o = overlap(p, q);
+      if (o / Math.min(area(p), area(q)) < 0.85 || Math.min(area(p), area(q)) / Math.max(area(p), area(q)) < 0.5) return;
+      drop.add((p.s || '').length >= (q.s || '').length ? j : i);
+    }));
+    return list.filter((_, i) => !drop.has(i));
   }
   function dataUrlToBlob(url) {
     const [head, body] = url.split(',');
@@ -208,94 +221,158 @@
     return {tiles: encode(source, w, h), source, w, h};
   }
 
-  /* ---------- erase the original text: fill from the surrounding edges, keep the original ink colour ---------- */
+  /* ---------- erase the original text: only the thin strokes are replaced, so buttons, borders and gradients stay intact ---------- */
   const relLum = (r, g, b) => { const f = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
   const contrastOf = (a, b) => { const p = relLum(...a), q = relLum(...b); return (Math.max(p, q) + 0.05) / (Math.min(p, q) + 0.05); };
-  const smoothStrip = (arr, k = 2) => arr.map((_, i) => {
-    let r = 0, g = 0, b = 0, n = 0;
-    for (let j = Math.max(0, i - k); j <= Math.min(arr.length - 1, i + k); j++) if (arr[j]) { r += arr[j][0]; g += arr[j][1]; b += arr[j][2]; n++; }
-    return n ? [r / n, g / n, b / n] : null;
-  });
-  const roughness = arr => {
-    let sum = 0, n = 0;
-    for (let i = 1; i < arr.length; i++) if (arr[i] && arr[i - 1]) { sum += (Math.abs(arr[i][0] - arr[i - 1][0]) + Math.abs(arr[i][1] - arr[i - 1][1]) + Math.abs(arr[i][2] - arr[i - 1][2])) / 3; n++; }
-    return n ? sum / n : 0;
-  };
   const rgb = c => `rgb(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])})`;
   const darkOrLight = c => (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) > 140 ? '#111' : '#fff';
 
-  /* Returns a plan: the pixel box, how to fill it (gradient-aware ImageData or a solid colour), the text colour and alignment. */
-  function prepareRegion(ctx, W, H, region, subtle) {
-    const pad = Math.max(2, Math.round(Math.min(W, H) * 0.004)), b = region.b;
-    let x0 = Math.max(0, Math.floor(b[1] / 1000 * W) - pad), y0 = Math.max(0, Math.floor(b[0] / 1000 * H) - pad);
-    let x1 = Math.min(W, Math.ceil(b[3] / 1000 * W) + pad), y1 = Math.min(H, Math.ceil(b[2] / 1000 * H) + pad);
-    if (x1 - x0 < 4 || y1 - y0 < 4) return null;
-    if (subtle) return {x0, y0, x1, y1, solid: 'rgba(0,0,0,.74)', fg: '#fff', align: region.a || 'c'};
-    const R = 3;
-    let plan = null;
-    for (let pass = 0; pass < 3; pass++) {
-      const w = x1 - x0, h = y1 - y0;
-      const ex0 = Math.max(0, x0 - R), ey0 = Math.max(0, y0 - R), ex1 = Math.min(W, x1 + R), ey1 = Math.min(H, y1 + R), ew = ex1 - ex0;
-      const ed = ctx.getImageData(ex0, ey0, ew, ey1 - ey0).data;
-      const at = (x, y) => ((y - ey0) * ew + (x - ex0)) * 4;
-      const avg = (xa, xb, ya, yb) => {
-        xa = Math.max(xa, 0); xb = Math.min(xb, W); ya = Math.max(ya, 0); yb = Math.min(yb, H);
-        let r = 0, g = 0, bl = 0, n = 0;
-        for (let y = ya; y < yb; y++) for (let x = xa; x < xb; x++) { const o = at(x, y); r += ed[o]; g += ed[o + 1]; bl += ed[o + 2]; n++; }
-        return n ? [r / n, g / n, bl / n] : null;
-      };
-      const rawL = Array.from({length: h}, (_, i) => avg(x0 - R, x0, y0 + i, y0 + i + 1));
-      const rawR = Array.from({length: h}, (_, i) => avg(x1, x1 + R, y0 + i, y0 + i + 1));
-      const rawT = Array.from({length: w}, (_, i) => avg(x0 + i, x0 + i + 1, y0 - R, y0));
-      const rawB = Array.from({length: w}, (_, i) => avg(x0 + i, x0 + i + 1, y1, y1 + R));
-      const strips = [rawL, rawR, rawT, rawB], known = strips.flat().filter(Boolean);
-      if (!known.length) return {x0, y0, x1, y1, solid: '#fff', fg: '#111', align: region.a || 'c'};
-      const median = i => known.map(c => c[i]).sort((p, q) => p - q)[known.length >> 1];
-      const mid = [median(0), median(1), median(2)];
-      const smooth = Math.max(...strips.map(roughness)) <= 9;
-      if (!smooth) return {x0, y0, x1, y1, solid: rgb(mid), fg: darkOrLight(mid), align: region.a || 'c'};
-      const [L, Rr, T, B] = strips.map(s => smoothStrip(s));
-      const fill = new ImageData(w, h), dist = new Uint16Array(w * h), sum = [0, 0, 0];
-      let maxD = 0;
-      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-        const tx = (x + 0.5) / w, ty = (y + 0.5) / h, est = [];
-        if (L[y] && Rr[y]) est.push([0, 1, 2].map(k => L[y][k] * (1 - tx) + Rr[y][k] * tx)); else if (L[y] || Rr[y]) est.push(L[y] || Rr[y]);
-        if (T[x] && B[x]) est.push([0, 1, 2].map(k => T[x][k] * (1 - ty) + B[x][k] * ty)); else if (T[x] || B[x]) est.push(T[x] || B[x]);
-        const c = est.length === 2 ? [0, 1, 2].map(k => (est[0][k] + est[1][k]) / 2) : est[0] || mid;
-        const o = (y * w + x) * 4, so = at(x0 + x, y0 + y);
-        fill.data[o] = c[0]; fill.data[o + 1] = c[1]; fill.data[o + 2] = c[2]; fill.data[o + 3] = 255;
-        const d = Math.abs(ed[so] - c[0]) + Math.abs(ed[so + 1] - c[1]) + Math.abs(ed[so + 2] - c[2]);
-        dist[y * w + x] = d; if (d > maxD) maxD = d;
-        sum[0] += c[0]; sum[1] += c[1]; sum[2] += c[2];
+  /* Separable min/max filter on a one-channel buffer; closing (dark text) and opening (light text) remove strokes thinner than the window. */
+  function slide(src, w, h, r, horizontal, takeMax) {
+    const out = new Uint8Array(src.length), len = horizontal ? w : h, lines = horizontal ? h : w, step = horizontal ? 1 : w, lineStep = horizontal ? w : 1;
+    for (let l = 0; l < lines; l++) {
+      const base = l * lineStep;
+      for (let i = 0; i < len; i++) {
+        let v = takeMax ? 0 : 255;
+        for (let j = Math.max(0, i - r), e = Math.min(len - 1, i + r); j <= e; j++) { const p = src[base + j * step]; if (takeMax ? p > v : p < v) v = p; }
+        out[base + i * step] = v;
       }
-      const bg = sum.map(v => v / (w * h)), INK = 90, touch = {l: 0, r: 0, t: 0, b: 0}, band = 2;
-      let ink = 0, ix0 = w, ix1 = -1, cr = 0, cg = 0, cb = 0, cn = 0;
-      const strong = Math.max(INK, maxD * 0.75);
-      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-        const d = dist[y * w + x];
-        if (d <= INK) continue;
-        ink++;
-        if (x < ix0) ix0 = x; if (x > ix1) ix1 = x;
-        if (x < band) touch.l++; if (x >= w - band) touch.r++; if (y < band) touch.t++; if (y >= h - band) touch.b++;
-        if (d >= strong) { const so = at(x0 + x, y0 + y); cr += ed[so]; cg += ed[so + 1]; cb += ed[so + 2]; cn++; }
-      }
-      const grow = Math.max(3, Math.round(Math.min(w, h) * 0.08));
-      if (pass < 2 && (touch.l >= 3 || touch.r >= 3 || touch.t >= 3 || touch.b >= 3)) {
-        const nx0 = touch.l >= 3 ? Math.max(0, x0 - grow) : x0, nx1 = touch.r >= 3 ? Math.min(W, x1 + grow) : x1;
-        const ny0 = touch.t >= 3 ? Math.max(0, y0 - grow) : y0, ny1 = touch.b >= 3 ? Math.min(H, y1 + grow) : y1;
-        if (nx0 !== x0 || nx1 !== x1 || ny0 !== y0 || ny1 !== y1) { x0 = nx0; x1 = nx1; y0 = ny0; y1 = ny1; continue; }
-      }
-      const inkOk = cn >= 6 && ink / (w * h) < 0.5;
-      const inkColor = inkOk ? [cr / cn, cg / cn, cb / cn] : null;
-      let align = region.a || 'c';
-      if (inkOk) {
-        const gapL = ix0, gapR = w - 1 - ix1;
-        if (Math.abs(gapR - gapL) >= 0.12 * w) align = gapR > gapL ? 'l' : 'r';
-      }
-      plan = {x0, y0, x1, y1, fill, align, fg: inkColor && contrastOf(inkColor, bg) >= 3 ? rgb(inkColor) : darkOrLight(bg)};
-      break;
     }
-    return plan || {x0, y0, x1, y1, solid: '#fff', fg: '#111', align: region.a || 'c'};
+    return out;
+  }
+  const morph = (src, w, h, r, takeMax) => slide(slide(src, w, h, r, true, takeMax), w, h, r, false, takeMax);
+  function ringMedian(d, w, h) {
+    const rs = [], gs = [], bs = [], t = Math.min(2, Math.max(1, h >> 2), Math.max(1, w >> 2));
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (x >= t && x < w - t && y >= t && y < h - t) continue;
+      const o = (y * w + x) * 4; rs.push(d[o]); gs.push(d[o + 1]); bs.push(d[o + 2]);
+    }
+    const med = a => a.sort((p, q) => p - q)[a.length >> 1];
+    return [med(rs), med(gs), med(bs)];
+  }
+  /* Fill every masked pixel by interpolating between the nearest unmasked pixels of its row and its column. */
+  function inpaint(d, mask, w, h, fallback) {
+    const est = new Float32Array(w * h * 3), cnt = new Uint8Array(w * h);
+    const run = (horizontal) => {
+      const len = horizontal ? w : h, lines = horizontal ? h : w, idx = (l, i) => horizontal ? l * w + i : i * w + l;
+      for (let l = 0; l < lines; l++) {
+        for (let i = 0; i < len;) {
+          if (!mask[idx(l, i)]) { i++; continue; }
+          let j = i;
+          while (j < len && mask[idx(l, j)]) j++;
+          const a = i > 0 ? idx(l, i - 1) * 4 : -1, b = j < len ? idx(l, j) * 4 : -1;
+          if (a >= 0 || b >= 0) for (let k = i; k < j; k++) {
+            const t = (k - i + 1) / (j - i + 1), p = idx(l, k);
+            for (let c = 0; c < 3; c++) est[p * 3 + c] += a >= 0 && b >= 0 ? d[a + c] * (1 - t) + d[b + c] * t : d[(a >= 0 ? a : b) + c];
+            cnt[p]++;
+          }
+          i = j;
+        }
+      }
+    };
+    run(true); run(false);
+    const patch = new ImageData(w, h), avg = [0, 0, 0];
+    let n = 0;
+    for (let p = 0; p < w * h; p++) {
+      if (!mask[p]) continue;
+      for (let c = 0; c < 3; c++) { const v = cnt[p] ? est[p * 3 + c] / cnt[p] : fallback[c]; patch.data[p * 4 + c] = v; avg[c] += v; }
+      patch.data[p * 4 + 3] = 255;
+      n++;
+    }
+    return {patch, bg: n ? avg.map(v => v / n) : fallback};
+  }
+
+  /* Plan for one region: the padded area, the erase patch (null = solid fill), the real ink box, text colour, weight, alignment and size cap. */
+  function prepareRegion(ctx, W, H, region, subtle) {
+    const b = region.b, hint = region.a || 'c', ph = (b[2] - b[0]) / 1000 * H;
+    const pad = Math.max(2, Math.min(8, Math.round(ph * 0.12)));
+    const x0 = Math.max(0, Math.floor(b[1] / 1000 * W) - pad), y0 = Math.max(0, Math.floor(b[0] / 1000 * H) - pad);
+    const x1 = Math.min(W, Math.ceil(b[3] / 1000 * W) + pad), y1 = Math.min(H, Math.ceil(b[2] / 1000 * H) + pad);
+    const w = x1 - x0, h = y1 - y0, n = w * h;
+    if (w < 4 || h < 4) return null;
+    const area = {x0, y0, x1, y1, align: hint, weight: 600, ib: null};
+    if (subtle) return {...area, solid: 'rgba(0,0,0,.74)', fg: '#fff'};
+    const d = ctx.getImageData(x0, y0, w, h).data, edge = ringMedian(d, w, h), solid = {...area, solid: rgb(edge), fg: darkOrLight(edge)};
+    const L = new Uint8Array(n);
+    for (let i = 0; i < n; i++) L[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+    const r = Math.max(2, Math.min(16, Math.round(ph * 0.1)));
+    const C = morph(morph(L, w, h, r, true), w, h, r, false), O = morph(morph(L, w, h, r, false), w, h, r, true);
+    // one polarity only: otherwise the gaps between strokes look like thin light text on dark text
+    let meanL = 0, darkN = 0, lightN = 0;
+    const centre = [];
+    for (let y = h >> 2; y < h - (h >> 2); y++) for (let x = w >> 2; x < w - (w >> 2); x++) centre.push(L[y * w + x]);
+    const med = Uint8Array.from(centre.length ? centre : L).sort()[(centre.length || n) >> 1];
+    for (let i = 0; i < n; i++) { meanL += L[i]; if (C[i] - L[i] > 28 && L[i] < med) darkN++; if (L[i] - O[i] > 28 && L[i] > med) lightN++; }
+    meanL /= n;
+    const edgeL = 0.299 * edge[0] + 0.587 * edge[1] + 0.114 * edge[2];
+    const dark = Math.min(darkN, lightN) < 0.7 * Math.max(darkN, lightN) ? darkN > lightN : Math.abs(meanL - edgeL) > 0.5 ? meanL < edgeL : darkN <= lightN;
+    const mask = new Uint8Array(n), diff = new Uint8Array(n);
+    let count = 0, maxD = 0;
+    for (let i = 0; i < n; i++) {
+      const v = dark ? C[i] - L[i] : L[i] - O[i];
+      diff[i] = Math.max(0, v);
+      if (v > 18) { mask[i] = 255; count++; }
+    }
+    // long thin structures that merely cross a sloppy box (borders, rules, outlines) are not text: leave them alone
+    const seenPx = new Uint8Array(n), stack = [];
+    for (let s = 0; s < n; s++) {
+      if (!mask[s] || seenPx[s]) continue;
+      const comp = [];
+      let cx0 = w, cx1 = -1, cy0 = h, cy1 = -1;
+      stack.push(s); seenPx[s] = 1;
+      while (stack.length) {
+        const i = stack.pop(), x = i % w, y = (i - x) / w;
+        comp.push(i);
+        if (x < cx0) cx0 = x; if (x > cx1) cx1 = x; if (y < cy0) cy0 = y; if (y > cy1) cy1 = y;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const j = ny * w + nx;
+          if (mask[j] && !seenPx[j]) { seenPx[j] = 1; stack.push(j); }
+        }
+      }
+      const bw = cx1 - cx0 + 1, bh = cy1 - cy0 + 1;
+      const touches = (cx0 === 0 && x0 > 0) || (cy0 === 0 && y0 > 0) || (cx1 === w - 1 && x1 < W) || (cy1 === h - 1 && y1 < H);
+      if ((bw >= 0.92 * w || bh >= 0.92 * h) && (comp.length / (bw * bh) < 0.35 || Math.min(bw, bh) <= 0.3 * Math.max(bw, bh)) || touches) {
+        for (const i of comp) mask[i] = 0;
+        count -= comp.length;
+      }
+    }
+    for (let i = 0; i < n; i++) if (mask[i] && diff[i] > maxD) maxD = diff[i];
+    if (count < 6 || count / n > 0.55) return solid; // no thin strokes found, or a photo-like area: plain fill
+    const dilated = morph(mask, w, h, ph > 40 ? 2 : 1, true);
+    const {patch, bg} = inpaint(d, dilated, w, h, edge);
+
+    const rowC = new Uint16Array(h), colC = new Uint16Array(w);
+    let ix0 = w, ix1 = -1, iy0 = h, iy1 = -1, cr = 0, cg = 0, cb = 0, cn = 0;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!mask[i]) continue;
+      rowC[y]++; colC[x]++;
+      if (x < ix0) ix0 = x; if (x > ix1) ix1 = x; if (y < iy0) iy0 = y; if (y > iy1) iy1 = y;
+      if (diff[i] >= maxD * 0.7) { cr += d[i * 4]; cg += d[i * 4 + 1]; cb += d[i * 4 + 2]; cn++; }
+    }
+    const bands = [];
+    for (let y = iy0; y <= iy1; y++) {
+      if (!rowC[y]) continue;
+      let top = y, lo = w, hi = -1;
+      for (; y <= iy1 && rowC[y]; y++) for (let x = 0; x < w; x++) if (mask[y * w + x]) { if (x < lo) lo = x; if (x > hi) hi = x; }
+      bands.push({top, bottom: y, lo, hi});
+    }
+    const ibw = ix1 - ix0 + 1, ibh = iy1 - iy0 + 1;
+    let align = hint;
+    if (bands.length > 1) {
+      const spread = f => Math.max(...bands.map(f)) - Math.min(...bands.map(f)), tol = 0.04 * ibw + 2;
+      if (spread(q => q.lo) <= tol) align = 'l'; else if (spread(q => q.hi) <= tol) align = 'r'; else if (spread(q => (q.lo + q.hi) / 2) <= tol) align = 'c';
+    }
+    const density = count / (ibw * ibh), inkColor = cn >= 4 ? [cr / cn, cg / cn, cb / cn] : null;
+    return {
+      x0, y0, x1, y1, patch, align, solid: null,
+      ib: {x0: x0 + ix0, y0: y0 + iy0, x1: x0 + ix1 + 1, y1: y0 + iy1 + 1},
+      cap: ibh / bands.length * 0.95,
+      weight: density > 0.3 ? 700 : density < 0.16 ? 500 : 600,
+      fg: inkColor && contrastOf(inkColor, bg) >= 3 ? rgb(inkColor) : darkOrLight(bg)
+    };
   }
 
   /* ---------- paint the translation into a full-resolution copy ---------- */
@@ -311,40 +388,57 @@
     if (line) lines.push(line);
     return lines;
   }
-  function layoutText(ctx, text, bw, bh) {
-    let lo = 6, hi = Math.max(6, bh * 0.9), best = null;
+  function layoutText(ctx, text, bw, bh, weight = 600, cap = Infinity) {
+    let lo = 6, hi = Math.max(6, Math.min(bh * 0.9, cap)), best = null;
     for (let i = 0; i < 10; i++) {
       const size = (lo + hi) / 2;
-      ctx.font = `600 ${size}px ${FONT}`;
+      ctx.font = `${weight} ${size}px ${FONT}`;
       const lines = wrapLines(ctx, text, bw);
       if (lines && lines.length * size * 1.18 <= bh) { best = {size, lines}; lo = size; } else hi = size;
     }
     if (best) return best;
-    ctx.font = `600 6px ${FONT}`;
+    ctx.font = `${weight} 6px ${FONT}`;
     return {size: 6, lines: wrapLines(ctx, text, Infinity) || [text]};
   }
   function paintRegions(ctx, canvas, regions) {
     const W = canvas.width, H = canvas.height, subtle = conf.imageStyle === 'subtle';
     const plans = regions.map(r => ({region: r, plan: prepareRegion(ctx, W, H, r, subtle)})).filter(p => p.plan); // all sampling happens before anything is painted
     for (const {plan} of plans) { // erase first so overlapping boxes never cover each other's text
-      if (plan.fill) { ctx.putImageData(plan.fill, plan.x0, plan.y0); continue; }
+      if (plan.patch) { // only stroke pixels carry alpha, so earlier erasures are never reverted
+        const tmp = document.createElement('canvas');
+        tmp.width = plan.x1 - plan.x0; tmp.height = plan.y1 - plan.y0;
+        tmp.getContext('2d').putImageData(plan.patch, 0, 0);
+        ctx.drawImage(tmp, plan.x0, plan.y0);
+        continue;
+      }
       ctx.beginPath();
       ctx.roundRect(plan.x0, plan.y0, plan.x1 - plan.x0, plan.y1 - plan.y0, Math.min(6, (plan.y1 - plan.y0) * 0.15));
       ctx.fillStyle = plan.solid;
       ctx.fill();
     }
     for (const {region, plan} of plans) {
-      const w = plan.x1 - plan.x0, h = plan.y1 - plan.y0, inner = Math.max(1, w * 0.02);
+      const area = {x0: plan.x0, y0: plan.y0, x1: plan.x1, y1: plan.y1};
+      const fit = box => {
+        const w = box.x1 - box.x0, h = box.y1 - box.y0, inner = Math.max(1, w * 0.02);
+        return {box, inner, ...layoutText(ctx, region.v, w - inner * 2, h, plan.weight, plan.cap)};
+      };
+      let layout = fit(area);
+      if (plan.ib) { // match the original text size first; fall back to the whole area when the translation is much longer
+        const ex = Math.max(2, (plan.ib.x1 - plan.ib.x0) * 0.04), ey = Math.max(2, (plan.ib.y1 - plan.ib.y0) * 0.08);
+        const tight = fit({x0: Math.max(area.x0, plan.ib.x0 - ex), y0: Math.max(area.y0, plan.ib.y0 - ey), x1: Math.min(area.x1, plan.ib.x1 + ex), y1: Math.min(area.y1, plan.ib.y1 + ey)});
+        layout = tight.size >= plan.cap * 0.72 || tight.size >= layout.size ? tight : layout;
+      }
+      const {box, inner, size, lines} = layout, w = box.x1 - box.x0, h = box.y1 - box.y0;
       ctx.save();
       ctx.beginPath();
-      ctx.rect(plan.x0, plan.y0, w, h);
+      ctx.rect(area.x0, area.y0, area.x1 - area.x0, area.y1 - area.y0);
       ctx.clip();
-      const {size, lines} = layoutText(ctx, region.v, w - inner * 2, h);
+      ctx.font = `${plan.weight} ${size}px ${FONT}`;
       ctx.fillStyle = plan.fg;
       ctx.textBaseline = 'middle';
       ctx.textAlign = plan.align === 'l' ? 'left' : plan.align === 'r' ? 'right' : 'center';
-      const tx = plan.align === 'l' ? plan.x0 + inner : plan.align === 'r' ? plan.x1 - inner : plan.x0 + w / 2;
-      const lh = size * 1.18, y = plan.y0 + h / 2 - ((lines.length - 1) * lh) / 2;
+      const tx = plan.align === 'l' ? box.x0 + inner : plan.align === 'r' ? box.x1 - inner : box.x0 + w / 2;
+      const lh = size * 1.18, y = box.y0 + h / 2 - ((lines.length - 1) * lh) / 2;
       lines.forEach((text, n) => ctx.fillText(text, tx, y + n * lh, w));
       ctx.restore();
     }
